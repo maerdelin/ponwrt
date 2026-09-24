@@ -139,6 +139,7 @@ jobs:
           CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_nokia_xg-040g-md-ubi=y
 
           CONFIG_PACKAGE_luci-app-store=y
+          CONFIG_PACKAGE_xz-utils=y
           CONFIG_PACKAGE_luci-app-openclash=y
           CONFIG_PACKAGE_samba4-server=y
           CONFIG_PACKAGE_luci-app-samba4=y
@@ -175,6 +176,12 @@ jobs:
             echo "========== iStore .config =========="
             grep -i 'istore\|luci-app-store' .config || true
 
+            echo "========== xz-utils =========="
+            grep 'CONFIG_PACKAGE_xz-utils' .config || true
+
+            echo "========== TAR_XZ =========="
+            grep 'CONFIG_PACKAGE_TAR_XZ' .config || true
+
             echo "========== iStore Kconfig =========="
             grep -n -A20 -B5 \
               'PACKAGE_luci-app-store' \
@@ -192,6 +199,10 @@ jobs:
 
           grep '^CONFIG_PACKAGE_luci-app-store=y$' .config
           echo "iStore config OK."
+
+          echo "========== xz-utils =========="
+          grep '^CONFIG_PACKAGE_xz-utils=y$' .config
+          echo "xz-utils config OK."
 
           echo "========== OpenClash =========="
           grep '^CONFIG_PACKAGE_luci-app-openclash=y$' .config
