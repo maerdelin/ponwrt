@@ -81,7 +81,23 @@ jobs:
           ./scripts/feeds install -a
 
           ./scripts/feeds install -d y -p istore luci-app-store
+      - name: Set Argon brand to ImmortalWrt
+        run: |
+          sed -i 's/{{ hostname }}/ImmortalWrt/g' \
+            feeds/luci/themes/luci-theme-argon/ucode/template/themes/argon/header.ut
 
+          echo "Argon brand:"
+          grep 'class="brand"' \
+            feeds/luci/themes/luci-theme-argon/ucode/template/themes/argon/header.ut
+
+      - name: Set firmware brand to ImmortalWrt
+        run: |
+          sed -i \
+            's/VERSION_DIST:=$(if $(VERSION_DIST),$(VERSION_DIST),PonWrt)/VERSION_DIST:=$(if $(VERSION_DIST),$(VERSION_DIST),ImmortalWrt)/' \
+            include/version.mk
+
+          echo "Firmware brand:"
+          grep 'VERSION_DIST:=' include/version.mk
       # -----------------------------
       # Custom configuration
       # -----------------------------
