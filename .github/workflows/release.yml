@@ -2,6 +2,12 @@ name: Build XG-040G-MD UBI
 
 on:
   workflow_dispatch:
+    inputs:
+      config_only:
+        description: "仅输出配置文件，不编译固件。"
+        required: false
+        default: true
+        type: boolean
 
 permissions:
   contents: read
@@ -48,17 +54,11 @@ jobs:
           restore-keys: |
             ponwrt-xg040gmd-
 
-      # -----------------------------
-      # Add iStore official feed
-      # -----------------------------
       - name: Add iStore feed
         run: |
           echo '' >> feeds.conf.default
           echo 'src-git istore https://github.com/linkease/istore;main' >> feeds.conf.default
 
-      # -----------------------------
-      # Add OpenClash source
-      # -----------------------------
       - name: Add OpenClash
         run: |
           rm -rf /tmp/OpenClash
@@ -72,16 +72,13 @@ jobs:
           rm -rf package/luci-app-openclash
           cp -a /tmp/OpenClash/luci-app-openclash package/
 
-      # -----------------------------
-      # Update feeds
-      # -----------------------------
       - name: Install feeds
         run: |
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
           ./scripts/feeds install -d y -p istore luci-app-store
-          
+
       - name: Set Argon brand to ImmortalWrt
         run: |
           sed -i 's/{{ hostname }}/ImmortalWrt/g' \
@@ -99,9 +96,7 @@ jobs:
 
           echo "Firmware brand:"
           grep 'VERSION_DIST:=' include/version.mk
-      # -----------------------------
-      # Custom configuration
-      # -----------------------------
+
       - name: Create XG-040G-MD custom config
         run: |
           cat > /tmp/xg040gmd.config <<'EOF'
@@ -158,9 +153,6 @@ jobs:
 
           make defconfig
 
-      # -----------------------------
-      # Verify config
-      # -----------------------------
       - name: Verify target and packages
         run: |
           echo "========== Target =========="
@@ -191,14 +183,21 @@ jobs:
         run: |
           make download -j"$(nproc)"
 
+      - name: Upload build config
+        if: ${{ inputs.config_only }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: xg040gmd-build-config
+          path: .config
+          retention-days: 7
+
       - name: Build firmware
+        if: ${{ !inputs.config_only }}
         run: |
           make -j"$(nproc)"
 
-      # -----------------------------
-      # Only keep sysupgrade.itb
-      # -----------------------------
       - name: Collect sysupgrade.itb only
+        if: ${{ !inputs.config_only }}
         run: |
           mkdir -p release
 
@@ -208,6 +207,7 @@ jobs:
             -exec cp -v {} release/ \;
 
       - name: Verify firmware
+        if: ${{ !inputs.config_only }}
         run: |
           echo "Generated firmware:"
           ls -lh release/
@@ -221,6 +221,7 @@ jobs:
             -print -quit)"
 
       - name: Upload sysupgrade.itb
+        if: ${{ !inputs.config_only }}
         uses: actions/upload-artifact@v4
         with:
           name: nokia-xg-040g-md-ubi-sysupgrade
