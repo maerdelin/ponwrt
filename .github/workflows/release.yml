@@ -81,6 +81,7 @@ jobs:
           ./scripts/feeds install -a
 
           ./scripts/feeds install -d y -p istore luci-app-store
+          
       - name: Set Argon brand to ImmortalWrt
         run: |
           sed -i 's/{{ hostname }}/ImmortalWrt/g' \
