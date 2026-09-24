@@ -54,6 +54,13 @@ jobs:
           restore-keys: |
             ponwrt-xg040gmd-
 
+      - name: Add iStore official feed
+        run: |
+          if ! grep -q '^src-git istore ' feeds.conf.default; then
+            echo '' >> feeds.conf.default
+            echo 'src-git istore https://github.com/linkease/istore;main' >> feeds.conf.default
+          fi
+
       - name: Add OpenClash
         run: |
           rm -rf /tmp/OpenClash
@@ -64,10 +71,26 @@ jobs:
           rm -rf package/luci-app-openclash
           cp -a /tmp/OpenClash/luci-app-openclash package/
 
-      - name: Install base feeds
+      - name: Install feeds and iStore
         run: |
           ./scripts/feeds update -a
           ./scripts/feeds install -a
+
+          ./scripts/feeds install -d y -p istore luci-app-store
+
+          echo "========== iStore PACKAGE CHECK =========="
+
+          if [ ! -f "./package/feeds/istore/luci-app-store/Makefile" ]; then
+            echo "ERROR: luci-app-store was not installed into package tree!"
+            find ./package ./feeds \
+              -iname '*istore*' \
+              -o -iname '*luci-app-store*' \
+              2>/dev/null || true
+            exit 1
+          fi
+
+          echo "luci-app-store package found."
+          echo "=========================================="
 
       - name: Load repository signing key
         env:
@@ -112,14 +135,17 @@ jobs:
           # CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_znxt_zn504xg-d is not set
           # CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_znxt_zn515xg-d is not set
           # CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_quantum_q1000k-ubi is not set
+
           CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_nokia_xg-040g-md-ubi=y
+
+          CONFIG_PACKAGE_luci-app-store=y
           CONFIG_PACKAGE_luci-app-openclash=y
           CONFIG_PACKAGE_samba4-server=y
           CONFIG_PACKAGE_luci-app-samba4=y
           CONFIG_PACKAGE_luci-i18n-samba4-zh-cn=y
           EOF
 
-      - name: Create XG-040G-MD config
+      - name: Configure XG-040G-MD
         run: |
           ./scripts/kconfig.pl + \
             configs/an7581.config \
@@ -127,38 +153,53 @@ jobs:
             configs/release.config \
             /tmp/xg040gmd.config > .config
 
-      - name: Integrate iStore officially
-        run: |
-          echo >> feeds.conf.default
-          echo 'src-git istore https://github.com/linkease/istore;main' >> feeds.conf.default
-          ./scripts/feeds update istore
-          ./scripts/feeds install -d y -p istore luci-app-store
-
-      - name: Finalize XG-040G-MD config
-        run: |
           make defconfig
 
       - name: Verify target and packages
         run: |
           echo "========== Target =========="
+
           grep '^CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_.*=y' .config
 
           test "$(grep -c '^CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_.*=y' .config)" -eq 1
 
           grep -q \
-            '^CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_nokia_xg-040g-md-ubi=y' \
+            '^CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_nokia_xg-040g-md-ubi=y$' \
             .config
 
           echo "========== iStore =========="
-          grep '^CONFIG_PACKAGE_luci-app-store=y' .config
+
+          if ! grep -q '^CONFIG_PACKAGE_luci-app-store=y$' .config; then
+            echo "ERROR: luci-app-store is missing from final .config!"
+
+            echo "========== iStore .config =========="
+            grep -i 'istore\|luci-app-store' .config || true
+
+            echo "========== iStore Kconfig =========="
+            grep -n -A20 -B5 \
+              'PACKAGE_luci-app-store' \
+              tmp/.config-package.in \
+              2>/dev/null || true
+
+            echo "========== iStore package metadata =========="
+            grep -Rni \
+              'luci-app-store' \
+              tmp/.packageinfo* \
+              2>/dev/null | head -50 || true
+
+            exit 1
+          fi
+
+          grep '^CONFIG_PACKAGE_luci-app-store=y$' .config
+          echo "iStore config OK."
 
           echo "========== OpenClash =========="
-          grep '^CONFIG_PACKAGE_luci-app-openclash=y' .config
+          grep '^CONFIG_PACKAGE_luci-app-openclash=y$' .config
 
           echo "========== Samba =========="
-          grep '^CONFIG_PACKAGE_samba4-server=y' .config
-          grep '^CONFIG_PACKAGE_luci-app-samba4=y' .config
-          grep '^CONFIG_PACKAGE_luci-i18n-samba4-zh-cn=y' .config
+          grep '^CONFIG_PACKAGE_samba4-server=y$' .config
+          grep '^CONFIG_PACKAGE_luci-app-samba4=y$' .config
+          grep '^CONFIG_PACKAGE_luci-i18n-samba4-zh-cn=y$' .config
 
       - name: Upload build config
         if: ${{ inputs.config_only }}
@@ -183,7 +224,8 @@ jobs:
         run: |
           mkdir -p release
 
-          find bin/targets/airoha/an7581/ -maxdepth 1 \
+          find bin/targets/airoha/an7581/ \
+            -maxdepth 1 \
             -type f \
             -name '*nokia_xg-040g-md-ubi-sysupgrade.itb' \
             -exec cp -v {} release/ \;
