@@ -17,6 +17,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: master
+          fetch-depth: 0
 
       - name: Free build space
         run: |
@@ -43,7 +44,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: dl
-          key: ponwrt-xg040gmd-${{ hashFiles('feeds.conf.default', 'configs/an7581.config') }}
+          key: ponwrt-xg040gmd-${{ hashFiles('feeds.conf.default', 'configs/an7581.config', 'configs/release.config') }}
           restore-keys: |
             ponwrt-xg040gmd-
 
@@ -55,21 +56,22 @@ jobs:
       - name: Create XG-040G-MD only config
         run: |
           cat > /tmp/xg040gmd.config <<'EOF'
+          # CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_airoha_an7581-evb is not set
+          # CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_airoha_an7581-evb-emmc-eagle is not set
+          # CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_airoha_an7581-evb-emmc-kite is not set
+          # CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_gemtek_w1700k-ubi is not set
+          # CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_gemtek_xg2010g is not set
+          # CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_nokia_valyrian is not set
           # CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_fiberhome_hg5382a is not set
           # CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_fiberhome_hg5585f-ct is not set
           # CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_fiberhome_hg5585f-cu is not set
-          # CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_gemtek_xg2010g is not set
-          # CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_nokia_valyrian is not set
-          CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_nokia_xg-040g-md-ubi=y
           # CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_nokia_xg-040g-tf-ubi is not set
           # CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_unionman_ung00a is not set
           # CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_znxt_zn504xg-d is not set
           # CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_znxt_zn515xg-d is not set
           # CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_quantum_q1000k-ubi is not set
-          # CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_gemtek_w1700k-ubi is not set
-          # CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_airoha_an7581-evb is not set
-          # CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_airoha_an7581-evb-emmc-eagle is not set
-          # CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_airoha_an7581-evb-emmc-kite is not set
+
+          CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_nokia_xg-040g-md-ubi=y
           EOF
 
       - name: Configure XG-040G-MD
@@ -78,30 +80,46 @@ jobs:
             configs/an7581.config \
             configs/release.config \
             /tmp/xg040gmd.config > .config
+
           make defconfig
 
       - name: Verify target
         run: |
+          echo "Enabled AN7581 targets:"
           grep 'CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_.*=y' .config
 
+          test "$(grep -c '^CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_.*=y' .config)" -eq 1
+          grep -q '^CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_nokia_xg-040g-md-ubi=y' .config
+
       - name: Download sources
-        run: make download -j"$(nproc)"
+        run: |
+          make download -j"$(nproc)"
 
       - name: Build firmware
-        run: make -j"$(nproc)"
+        run: |
+          make -j"$(nproc)"
 
-      - name: Collect XG-040G-MD firmware
+      - name: Collect sysupgrade.itb only
         run: |
           mkdir -p release
+
           find bin/targets/airoha/an7581/ -maxdepth 1 \
             -type f \
-            -name '*xg-040g-md-ubi*' \
+            -name '*nokia_xg-040g-md-ubi-sysupgrade.itb' \
             -exec cp -v {} release/ \;
 
-      - name: Upload firmware
+      - name: Verify firmware
+        run: |
+          echo "Generated firmware:"
+          ls -lh release/
+
+          test "$(find release -maxdepth 1 -type f | wc -l)" -eq 1
+          test -n "$(find release -maxdepth 1 -type f -name '*nokia_xg-040g-md-ubi-sysupgrade.itb' -print -quit)"
+
+      - name: Upload sysupgrade.itb
         uses: actions/upload-artifact@v4
         with:
-          name: nokia-xg-040g-md-ubi
-          path: release/*
+          name: nokia-xg-040g-md-ubi-sysupgrade
+          path: release/*nokia_xg-040g-md-ubi-sysupgrade.itb
           if-no-files-found: error
           retention-days: 7
