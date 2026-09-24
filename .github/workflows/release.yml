@@ -46,6 +46,10 @@ jobs:
             qemu-utils re2c rsync scons squashfs-tools subversion swig texinfo \
             uglifyjs unzip wget xmlto xxd zlib1g-dev zstd
 
+      - name: Prepare download cache directory
+        run: |
+          mkdir -p dl
+
       - name: Cache downloads
         uses: actions/cache@v4
         with:
@@ -218,6 +222,7 @@ jobs:
         with:
           name: xg040gmd-build-config
           path: .config
+          include-hidden-files: true
           retention-days: 7
 
       - name: Download sources
