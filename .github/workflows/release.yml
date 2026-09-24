@@ -54,11 +54,6 @@ jobs:
           restore-keys: |
             ponwrt-xg040gmd-
 
-      - name: Add iStore feed
-        run: |
-          echo '' >> feeds.conf.default
-          echo 'src-git istore https://github.com/linkease/istore;main' >> feeds.conf.default
-
       - name: Add OpenClash
         run: |
           rm -rf /tmp/OpenClash
@@ -69,11 +64,10 @@ jobs:
           rm -rf package/luci-app-openclash
           cp -a /tmp/OpenClash/luci-app-openclash package/
 
-      - name: Install feeds
+      - name: Install base feeds
         run: |
           ./scripts/feeds update -a
           ./scripts/feeds install -a
-          ./scripts/feeds install -d y -p istore luci-app-store
 
       - name: Load repository signing key
         env:
@@ -119,14 +113,13 @@ jobs:
           # CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_znxt_zn515xg-d is not set
           # CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_quantum_q1000k-ubi is not set
           CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_nokia_xg-040g-md-ubi=y
-          CONFIG_PACKAGE_luci-app-store=y
           CONFIG_PACKAGE_luci-app-openclash=y
           CONFIG_PACKAGE_samba4-server=y
           CONFIG_PACKAGE_luci-app-samba4=y
           CONFIG_PACKAGE_luci-i18n-samba4-zh-cn=y
           EOF
 
-      - name: Configure XG-040G-MD
+      - name: Create XG-040G-MD config
         run: |
           ./scripts/kconfig.pl + \
             configs/an7581.config \
@@ -134,6 +127,15 @@ jobs:
             configs/release.config \
             /tmp/xg040gmd.config > .config
 
+      - name: Integrate iStore officially
+        run: |
+          echo >> feeds.conf.default
+          echo 'src-git istore https://github.com/linkease/istore;main' >> feeds.conf.default
+          ./scripts/feeds update istore
+          ./scripts/feeds install -d y -p istore luci-app-store
+
+      - name: Finalize XG-040G-MD config
+        run: |
           make defconfig
 
       - name: Verify target and packages
