@@ -1,40 +1,22 @@
-name: Release PonWrt
+name: Build XG-040G-MD UBI
 
 on:
   workflow_dispatch:
-    inputs:
-      tag:
-        description: Release tag
-        required: true
-        type: string
-      prerelease:
-        description: Mark as prerelease
-        required: true
-        default: true
-        type: boolean
 
 permissions:
   contents: read
 
-concurrency:
-  group: release-${{ inputs.tag }}
-  cancel-in-progress: false
-
 jobs:
   build:
-    name: Build ${{ matrix.target }}
+    name: Build Nokia XG-040G-MD UBI
     runs-on: ubuntu-24.04
     timeout-minutes: 360
-    environment: release
-    strategy:
-      fail-fast: false
-      matrix:
-        target:
-          - an7581
-          - an7583
 
     steps:
-      - uses: actions/checkout@v6
+      - name: Checkout latest upstream mirror
+        uses: actions/checkout@v6
+        with:
+          ref: master
 
       - name: Free build space
         run: |
@@ -61,87 +43,65 @@ jobs:
         uses: actions/cache@v4
         with:
           path: dl
-          key: ponwrt-dl-${{ matrix.target }}-${{ hashFiles('feeds.conf.default', 'configs/*.config') }}
+          key: ponwrt-xg040gmd-${{ hashFiles('feeds.conf.default', 'configs/an7581.config') }}
           restore-keys: |
-            ponwrt-dl-${{ matrix.target }}-
+            ponwrt-xg040gmd-
 
       - name: Install feeds
         run: |
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-      - name: Load repository signing key
-        env:
-          PONWRT_APK_PRIVATE_KEY: ${{ secrets.PONWRT_APK_PRIVATE_KEY }}
+      - name: Create XG-040G-MD only config
         run: |
-          if [ -n "$PONWRT_APK_PRIVATE_KEY" ]; then
-            umask 077
-            printf '%s\n' "$PONWRT_APK_PRIVATE_KEY" > private-key.pem
-            openssl ec -in private-key.pem -pubout -out public-key.pem
-          fi
+          cat > /tmp/xg040gmd.config <<'EOF'
+          # CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_fiberhome_hg5382a is not set
+          # CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_fiberhome_hg5585f-ct is not set
+          # CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_fiberhome_hg5585f-cu is not set
+          # CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_gemtek_xg2010g is not set
+          # CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_nokia_valyrian is not set
+          CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_nokia_xg-040g-md-ubi=y
+          # CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_nokia_xg-040g-tf-ubi is not set
+          # CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_unionman_ung00a is not set
+          # CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_znxt_zn504xg-d is not set
+          # CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_znxt_zn515xg-d is not set
+          # CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_quantum_q1000k-ubi is not set
+          # CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_gemtek_w1700k-ubi is not set
+          # CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_airoha_an7581-evb is not set
+          # CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_airoha_an7581-evb-emmc-eagle is not set
+          # CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_airoha_an7581-evb-emmc-kite is not set
+          EOF
 
-      - name: Configure ${{ matrix.target }}
+      - name: Configure XG-040G-MD
         run: |
           ./scripts/kconfig.pl + \
-            "configs/${{ matrix.target }}.config" \
-            configs/release.config > .config
+            configs/an7581.config \
+            configs/release.config \
+            /tmp/xg040gmd.config > .config
           make defconfig
+
+      - name: Verify target
+        run: |
+          grep 'CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_.*=y' .config
 
       - name: Download sources
         run: make download -j"$(nproc)"
 
-      - name: Build ${{ matrix.target }}
+      - name: Build firmware
         run: make -j"$(nproc)"
 
-      - name: Pack ${{ matrix.target }}
+      - name: Collect XG-040G-MD firmware
         run: |
-          mkdir release
-          tar --zstd -cf "release/ponwrt-${{ matrix.target }}.tar.zst" \
-            -C bin/targets/airoha "${{ matrix.target }}"
+          mkdir -p release
+          find bin/targets/airoha/an7581/ -maxdepth 1 \
+            -type f \
+            -name '*xg-040g-md-ubi*' \
+            -exec cp -v {} release/ \;
 
-      - name: Upload ${{ matrix.target }}
+      - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: ponwrt-${{ matrix.target }}
-          path: release/*.tar.zst
+          name: nokia-xg-040g-md-ubi
+          path: release/*
           if-no-files-found: error
           retention-days: 7
-
-  release:
-    name: Create release
-    needs: build
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: write
-
-    steps:
-      - name: Download firmware archives
-        uses: actions/download-artifact@v4
-        with:
-          pattern: ponwrt-*
-          path: release
-          merge-multiple: true
-
-      - name: Create checksums
-        working-directory: release
-        run: sha256sum *.tar.zst > sha256sums
-
-      - name: Create GitHub release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ inputs.tag }}
-          PRERELEASE: ${{ inputs.prerelease }}
-        run: |
-          args=(
-            "$RELEASE_TAG"
-            release/*.tar.zst
-            release/sha256sums
-            --repo "$GITHUB_REPOSITORY"
-            --target "$GITHUB_SHA"
-            --title "PonWrt $RELEASE_TAG"
-            --generate-notes
-          )
-          if [ "$PRERELEASE" = true ]; then
-            args+=(--prerelease)
-          fi
-          gh release create "${args[@]}"
