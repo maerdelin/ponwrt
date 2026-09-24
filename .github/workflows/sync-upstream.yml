@@ -1,0 +1,35 @@
+name: Sync upstream
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch upstream
+        run: |
+          git remote add upstream https://github.com/pbs05/ponwrt.git
+          git fetch upstream master
+
+      - name: Sync fork master with upstream
+        run: |
+          git checkout master
+          git reset --hard upstream/master
+          git push origin master --force-with-lease
