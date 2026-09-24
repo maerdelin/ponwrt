@@ -35,6 +35,7 @@ jobs:
           DEBIAN_FRONTEND: noninteractive
         run: |
           sudo apt-get update
+
           sudo apt-get install -y --no-install-recommends \
             asciidoc autoconf automake autopoint binutils bison build-essential \
             bzip2 ccache clang cmake cpio curl device-tree-compiler flex gawk \
@@ -69,21 +70,31 @@ jobs:
         run: |
           rm -rf /tmp/OpenClash
 
-          git clone --depth 1 --filter=blob:none --sparse \
+          git clone \
+            --depth 1 \
+            --filter=blob:none \
+            --sparse \
             https://github.com/vernesong/OpenClash.git \
             /tmp/OpenClash
 
-          git -C /tmp/OpenClash sparse-checkout set luci-app-openclash
+          git -C /tmp/OpenClash \
+            sparse-checkout set luci-app-openclash
 
           rm -rf package/luci-app-openclash
-          cp -a /tmp/OpenClash/luci-app-openclash package/
+
+          cp -a \
+            /tmp/OpenClash/luci-app-openclash \
+            package/
 
       - name: Install feeds and iStore
         run: |
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-          ./scripts/feeds install -d y -p istore luci-app-store
+          ./scripts/feeds install \
+            -d y \
+            -p istore \
+            luci-app-store
 
           echo "========== iStore PACKAGE CHECK =========="
 
@@ -108,7 +119,9 @@ jobs:
           if [ -n "$PONWRT_APK_PRIVATE_KEY" ]; then
             umask 077
 
-            printf '%s\n' "$PONWRT_APK_PRIVATE_KEY" > private-key.pem
+            printf '%s\n' \
+              "$PONWRT_APK_PRIVATE_KEY" \
+              > private-key.pem
 
             openssl ec \
               -in private-key.pem \
@@ -131,7 +144,8 @@ jobs:
             's/VERSION_DIST:=$(if $(VERSION_DIST),$(VERSION_DIST),PonWrt)/VERSION_DIST:=$(if $(VERSION_DIST),$(VERSION_DIST),ImmortalWrt)/' \
             include/version.mk
 
-          grep 'VERSION_DIST:=' include/version.mk
+          grep 'VERSION_DIST:=' \
+            include/version.mk
 
       - name: Create XG-040G-MD custom config
         run: |
@@ -178,7 +192,8 @@ jobs:
             configs/an7581.config \
             + \
             configs/release.config \
-            /tmp/xg040gmd.config > .config
+            /tmp/xg040gmd.config \
+            > .config
 
           make defconfig
 
@@ -186,47 +201,99 @@ jobs:
         run: |
           echo "========== Target =========="
 
-          grep '^CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_.*=y' .config
+          grep \
+            '^CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_.*=y' \
+            .config
 
-          test "$(grep -c '^CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_.*=y' .config)" -eq 1
+          test "$(
+            grep -c \
+              '^CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_.*=y' \
+              .config
+          )" -eq 1
 
           grep -q \
             '^CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_nokia_xg-040g-md-ubi=y$' \
             .config
 
+          echo "Target config OK."
+
           echo "========== iStore =========="
 
-          grep '^CONFIG_PACKAGE_luci-app-store=y$' .config
-          grep '^CONFIG_PACKAGE_xz-utils=y$' .config
+          grep \
+            '^CONFIG_PACKAGE_luci-app-store=y$' \
+            .config
+
+          grep \
+            '^CONFIG_PACKAGE_xz-utils=y$' \
+            .config
 
           echo "iStore config OK."
 
           echo "========== OpenClash =========="
 
-          grep '^CONFIG_PACKAGE_luci-app-openclash=y$' .config
+          grep \
+            '^CONFIG_PACKAGE_luci-app-openclash=y$' \
+            .config
+
+          echo "OpenClash config OK."
 
           echo "========== Samba =========="
 
-          grep '^CONFIG_PACKAGE_samba4-server=y$' .config
-          grep '^CONFIG_PACKAGE_luci-app-samba4=y$' .config
-          grep '^CONFIG_PACKAGE_luci-i18n-samba4-zh-cn=y$' .config
+          grep \
+            '^CONFIG_PACKAGE_samba4-server=y$' \
+            .config
+
+          grep \
+            '^CONFIG_PACKAGE_luci-app-samba4=y$' \
+            .config
+
+          grep \
+            '^CONFIG_PACKAGE_luci-i18n-samba4-zh-cn=y$' \
+            .config
+
+          echo "Samba config OK."
 
           echo "========== PON =========="
 
-          grep '^CONFIG_PACKAGE_kmod-airoha-pon-frontend=y$' .config
-          grep '^CONFIG_PACKAGE_kmod-airoha-xpon=y$' .config
-          grep '^CONFIG_PACKAGE_airoha-pon-debug=y$' .config
-          grep '^CONFIG_PACKAGE_airoha-ponctl=y$' .config
-          grep '^CONFIG_PACKAGE_airoha-pond=y$' .config
-          grep '^CONFIG_PACKAGE_luci-app-pon=y$' .config
-          grep '^CONFIG_PACKAGE_luci-i18n-pon-zh-cn=y$' .config
+          grep \
+            '^CONFIG_PACKAGE_kmod-airoha-pon-frontend=y$' \
+            .config
+
+          grep \
+            '^CONFIG_PACKAGE_kmod-airoha-xpon=y$' \
+            .config
+
+          grep \
+            '^CONFIG_PACKAGE_airoha-pon-debug=y$' \
+            .config
+
+          grep \
+            '^CONFIG_PACKAGE_airoha-ponctl=y$' \
+            .config
+
+          grep \
+            '^CONFIG_PACKAGE_airoha-pond=y$' \
+            .config
+
+          grep \
+            '^CONFIG_PACKAGE_luci-app-pon=y$' \
+            .config
+
+          grep \
+            '^CONFIG_PACKAGE_luci-i18n-pon-zh-cn=y$' \
+            .config
 
           echo "PON config OK."
 
           echo "========== Simplified Chinese =========="
 
-          grep '^CONFIG_LUCI_LANG_zh_Hans=y$' .config
-          grep '^CONFIG_PACKAGE_luci-i18n-base-zh-cn=y$' .config
+          grep \
+            '^CONFIG_LUCI_LANG_zh_Hans=y$' \
+            .config
+
+          grep \
+            '^CONFIG_PACKAGE_luci-i18n-base-zh-cn=y$' \
+            .config
 
           echo "Simplified Chinese config OK."
 
@@ -253,47 +320,86 @@ jobs:
         run: |
           make -j"$(nproc)"
 
-      - name: Show generated files
+      - name: Collect XG-040G-MD sysupgrade firmware
         if: ${{ !inputs.config_only }}
+        shell: bash
         run: |
-          echo "========== bin/targets/airoha/an7581 =========="
+          set -euo pipefail
 
-          ls -lah bin/targets/airoha/an7581/
-
-          echo "================================================"
-
-      - name: Pack AN7581 firmware
-        if: ${{ !inputs.config_only }}
-        run: |
           mkdir -p release
 
-          tar --zstd \
-            -cf "release/ponwrt-an7581.tar.zst" \
-            -C bin/targets/airoha \
-            an7581
+          echo "========== Generated files =========="
 
-      - name: Verify archive
+          ls -lah \
+            bin/targets/airoha/an7581/
+
+          echo "========== Search sysupgrade.itb =========="
+
+          mapfile -t firmware_files < <(
+            find \
+              bin/targets/airoha/an7581 \
+              -maxdepth 1 \
+              -type f \
+              -name '*sysupgrade.itb' \
+              -print
+          )
+
+          printf \
+            '%s\n' \
+            "${firmware_files[@]}"
+
+          echo "Found ${#firmware_files[@]} sysupgrade.itb file(s)."
+
+          if [ "${#firmware_files[@]}" -ne 1 ]; then
+            echo "ERROR: Expected exactly 1 sysupgrade.itb."
+            echo "ERROR: Found ${#firmware_files[@]}."
+            echo "ERROR: Refusing to upload an ambiguous firmware file."
+
+            exit 1
+          fi
+
+          cp -v \
+            "${firmware_files[0]}" \
+            release/
+
+      - name: Verify final firmware
         if: ${{ !inputs.config_only }}
+        shell: bash
         run: |
-          echo "========== Release archive =========="
+          set -euo pipefail
 
-          ls -lh release/
+          echo "========== Final firmware =========="
 
-          test -s release/ponwrt-an7581.tar.zst
+          ls -lah release/
 
-          echo "========== Archive contents =========="
+          mapfile -t final_files < <(
+            find \
+              release \
+              -maxdepth 1 \
+              -type f \
+              -name '*sysupgrade.itb' \
+              -print
+          )
 
-          tar --zstd \
-            -tf release/ponwrt-an7581.tar.zst \
-            | head -100
+          if [ "${#final_files[@]}" -ne 1 ]; then
+            echo "ERROR: Final release directory must contain exactly 1 sysupgrade.itb."
+            echo "ERROR: Found ${#final_files[@]}."
 
-          echo "Firmware archive OK."
+            exit 1
+          fi
 
-      - name: Upload AN7581 firmware
+          test -s "${final_files[0]}"
+
+          echo "=========================================="
+          echo "Exactly one XG-040G-MD sysupgrade firmware found:"
+          echo "${final_files[0]}"
+          echo "=========================================="
+
+      - name: Upload XG-040G-MD firmware
         if: ${{ !inputs.config_only }}
         uses: actions/upload-artifact@v4
         with:
-          name: ponwrt-an7581
-          path: release/ponwrt-an7581.tar.zst
+          name: nokia-xg-040g-md-ubi-sysupgrade
+          path: release/*sysupgrade.itb
           if-no-files-found: error
           retention-days: 7
