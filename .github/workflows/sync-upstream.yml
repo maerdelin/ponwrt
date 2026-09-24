@@ -13,9 +13,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout fork
+      - name: Checkout master
         uses: actions/checkout@v4
         with:
+          ref: master
           fetch-depth: 0
 
       - name: Configure Git
@@ -28,8 +29,8 @@ jobs:
           git remote add upstream https://github.com/pbs05/ponwrt.git
           git fetch upstream master
 
-      - name: Sync fork master with upstream
+      - name: Sync master
         run: |
           git checkout master
           git reset --hard upstream/master
-          git push origin master --force-with-lease
+          git push origin master --force
