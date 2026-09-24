@@ -130,6 +130,7 @@ jobs:
         run: |
           ./scripts/kconfig.pl + \
             configs/an7581.config \
+            + \
             configs/release.config \
             /tmp/xg040gmd.config > .config
 
