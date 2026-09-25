@@ -4,13 +4,17 @@ on:
   workflow_dispatch:
     inputs:
       config_only:
-        description: "仅输出配置文件，不编译固件。"
+        description: "仅验证配置，不编译固件。"
         required: false
-        default: true
+        default: false
         type: boolean
 
 permissions:
-  contents: read
+  contents: write
+
+concurrency:
+  group: xg040gmd-build
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -19,16 +23,60 @@ jobs:
     timeout-minutes: 360
 
     steps:
-      - name: Checkout latest upstream mirror
+      # ============================================================
+      # 1. Checkout fork master
+      # ============================================================
+
+      - name: Checkout fork master
         uses: actions/checkout@v6
         with:
           ref: master
           fetch-depth: 0
 
+      # ============================================================
+      # 2. Force sync latest upstream source before every build
+      # ============================================================
+
+      - name: Sync latest upstream PonWrt
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git remote remove upstream 2>/dev/null || true
+          git remote add upstream https://github.com/pbs05/ponwrt.git
+
+          echo "========== Fetch upstream =========="
+          git fetch upstream master
+
+          echo "========== Upstream latest commit =========="
+          git log -1 --oneline upstream/master
+
+          git checkout master
+          git reset --hard upstream/master
+
+          echo "========== Sync fork master =========="
+          git push origin HEAD:master --force
+
+          echo "========== Build source =========="
+          git log -1 --oneline
+
+      # ============================================================
+      # 3. Free disk space
+      # ============================================================
+
       - name: Free build space
         run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
           sudo apt-get clean
+
+      # ============================================================
+      # 4. Install build dependencies
+      # ============================================================
 
       - name: Install build dependencies
         env:
@@ -47,6 +95,10 @@ jobs:
             qemu-utils re2c rsync scons squashfs-tools subversion swig texinfo \
             uglifyjs unzip wget xmlto xxd zlib1g-dev zstd
 
+      # ============================================================
+      # 5. Cache
+      # ============================================================
+
       - name: Prepare download cache directory
         run: |
           mkdir -p dl
@@ -59,15 +111,63 @@ jobs:
           restore-keys: |
             ponwrt-xg040gmd-
 
+      # ============================================================
+      # 6. Add official iStore feed
+      # ============================================================
+
       - name: Add iStore official feed
+        shell: bash
         run: |
+          set -euo pipefail
+
           if ! grep -q '^src-git istore ' feeds.conf.default; then
             echo '' >> feeds.conf.default
             echo 'src-git istore https://github.com/linkease/istore;main' >> feeds.conf.default
           fi
 
-      - name: Add OpenClash
+          grep '^src-git istore ' feeds.conf.default
+
+      # ============================================================
+      # 7. Install all upstream feeds first
+      # ============================================================
+
+      - name: Install feeds
+        shell: bash
         run: |
+          set -euo pipefail
+
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      # ============================================================
+      # 8. Install iStore
+      # ============================================================
+
+      - name: Install iStore
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ./scripts/feeds install \
+            -d y \
+            -p istore \
+            luci-app-store
+
+          echo "========== iStore package check =========="
+
+          test -f package/feeds/istore/luci-app-store/Makefile
+
+          echo "luci-app-store package found."
+
+      # ============================================================
+      # 9. Replace feed OpenClash with latest official OpenClash
+      # ============================================================
+
+      - name: Add latest official OpenClash
+        shell: bash
+        run: |
+          set -euo pipefail
+
           rm -rf /tmp/OpenClash
 
           git clone \
@@ -80,37 +180,57 @@ jobs:
           git -C /tmp/OpenClash \
             sparse-checkout set luci-app-openclash
 
+          echo "========== OpenClash latest commit =========="
+          git -C /tmp/OpenClash log -1 --oneline
+
+          echo "========== OpenClash version =========="
+          grep '^PKG_VERSION:=' \
+            /tmp/OpenClash/luci-app-openclash/Makefile
+
+          # Remove ImmortalWrt feed copy to avoid duplicate package definition
+          rm -rf package/feeds/luci/luci-app-openclash
+
+          # Remove previous local copy
           rm -rf package/luci-app-openclash
 
+          # Install latest official OpenClash as local/core package
           cp -a \
             /tmp/OpenClash/luci-app-openclash \
-            package/
+            package/luci-app-openclash
 
-      - name: Install feeds and iStore
+          test -f package/luci-app-openclash/Makefile
+
+      # ============================================================
+      # 10. Verify OpenClash dependencies actually exist in package tree
+      # ============================================================
+
+      - name: Verify OpenClash dependency packages
+        shell: bash
         run: |
-          ./scripts/feeds update -a
-          ./scripts/feeds install -a
+          set -euo pipefail
 
-          ./scripts/feeds install \
-            -d y \
-            -p istore \
-            luci-app-store
+          echo "========== OpenClash dependency package tree =========="
 
-          echo "========== iStore PACKAGE CHECK =========="
+          test -f package/feeds/luci/luci-compat/Makefile
+          echo "luci-compat OK"
 
-          if [ ! -f "./package/feeds/istore/luci-app-store/Makefile" ]; then
-            echo "ERROR: luci-app-store was not installed into package tree!"
+          test -e package/feeds/packages/bash
+          echo "bash OK"
 
-            find ./package ./feeds \
-              -iname '*istore*' \
-              -o -iname '*luci-app-store*' \
-              2>/dev/null || true
+          test -e package/feeds/packages/curl
+          echo "curl OK"
 
-            exit 1
-          fi
+          test -e package/feeds/packages/ruby
+          echo "ruby OK"
 
-          echo "luci-app-store package found."
-          echo "=========================================="
+          test -e package/feeds/packages/unzip
+          echo "unzip OK"
+
+          echo "OpenClash dependency package tree OK."
+
+      # ============================================================
+      # 11. Repository signing key
+      # ============================================================
 
       - name: Load repository signing key
         env:
@@ -128,6 +248,10 @@ jobs:
               -pubout \
               -out public-key.pem
           fi
+
+      # ============================================================
+      # 12. Branding
+      # ============================================================
 
       - name: Set Argon brand to ImmortalWrt
         run: |
@@ -147,9 +271,17 @@ jobs:
           grep 'VERSION_DIST:=' \
             include/version.mk
 
+      # ============================================================
+      # 13. XG-040G-MD single-device custom config
+      # ============================================================
+
       - name: Create XG-040G-MD custom config
         run: |
           cat > /tmp/xg040gmd.config <<'EOF'
+
+          # --------------------------------------------------------
+          # Only build Nokia XG-040G-MD UBI
+          # --------------------------------------------------------
 
           # CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_airoha_an7581-evb is not set
           # CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_airoha_an7581-evb-emmc-eagle is not set
@@ -175,10 +307,41 @@ jobs:
 
           CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_nokia_xg-040g-md-ubi=y
 
+          # --------------------------------------------------------
+          # iStore
+          # --------------------------------------------------------
+
           CONFIG_PACKAGE_luci-app-store=y
           CONFIG_PACKAGE_xz-utils=y
 
+          # --------------------------------------------------------
+          # OpenClash
+          # --------------------------------------------------------
+
           CONFIG_PACKAGE_luci-app-openclash=y
+
+          # Critical LuCI compatibility package.
+          # Provides /usr/lib/lua/luci/cbi/datatypes.lua
+          CONFIG_PACKAGE_luci-compat=y
+
+          # OpenClash hard runtime dependencies
+          CONFIG_PACKAGE_dnsmasq-full=y
+          CONFIG_PACKAGE_bash=y
+          CONFIG_PACKAGE_curl=y
+          CONFIG_PACKAGE_ca-bundle=y
+          CONFIG_PACKAGE_ip-full=y
+          CONFIG_PACKAGE_ruby=y
+          CONFIG_PACKAGE_ruby-yaml=y
+          CONFIG_PACKAGE_kmod-tun=y
+          CONFIG_PACKAGE_unzip=y
+
+          # OpenClash runtime helper dependencies
+          CONFIG_PACKAGE_kmod-inet-diag=y
+          CONFIG_PACKAGE_kmod-nft-tproxy=y
+
+          # --------------------------------------------------------
+          # Samba
+          # --------------------------------------------------------
 
           CONFIG_PACKAGE_samba4-server=y
           CONFIG_PACKAGE_luci-app-samba4=y
@@ -186,8 +349,15 @@ jobs:
 
           EOF
 
+      # ============================================================
+      # 14. Generate final config
+      # ============================================================
+
       - name: Configure XG-040G-MD
+        shell: bash
         run: |
+          set -euo pipefail
+
           ./scripts/kconfig.pl + \
             configs/an7581.config \
             + \
@@ -197,109 +367,102 @@ jobs:
 
           make defconfig
 
+      # ============================================================
+      # 15. Strict pre-build verification
+      # ============================================================
+
       - name: Verify target and packages
+        shell: bash
         run: |
+          set -euo pipefail
+
           echo "========== Target =========="
 
           grep \
             '^CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_.*=y' \
             .config
 
-          test "$(
+          target_count="$(
             grep -c \
               '^CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_.*=y' \
               .config
-          )" -eq 1
+          )"
+
+          if [ "$target_count" -ne 1 ]; then
+            echo "ERROR: Expected exactly one AN7581 device."
+            echo "ERROR: Found ${target_count}."
+            exit 1
+          fi
 
           grep -q \
             '^CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_nokia_xg-040g-md-ubi=y$' \
             .config
 
-          echo "Target config OK."
+          echo "XG-040G-MD target OK."
 
           echo "========== iStore =========="
 
-          grep \
-            '^CONFIG_PACKAGE_luci-app-store=y$' \
-            .config
+          grep '^CONFIG_PACKAGE_luci-app-store=y$' .config
+          grep '^CONFIG_PACKAGE_xz-utils=y$' .config
 
-          grep \
-            '^CONFIG_PACKAGE_xz-utils=y$' \
-            .config
-
-          echo "iStore config OK."
+          echo "iStore OK."
 
           echo "========== OpenClash =========="
 
-          grep \
-            '^CONFIG_PACKAGE_luci-app-openclash=y$' \
-            .config
+          grep '^CONFIG_PACKAGE_luci-app-openclash=y$' .config
 
-          echo "OpenClash config OK."
+          echo "========== OpenClash runtime dependencies =========="
+
+          grep '^CONFIG_PACKAGE_luci-compat=y$' .config
+          grep '^CONFIG_PACKAGE_dnsmasq-full=y$' .config
+          grep '^CONFIG_PACKAGE_bash=y$' .config
+          grep '^CONFIG_PACKAGE_curl=y$' .config
+          grep '^CONFIG_PACKAGE_ca-bundle=y$' .config
+          grep '^CONFIG_PACKAGE_ip-full=y$' .config
+          grep '^CONFIG_PACKAGE_ruby=y$' .config
+          grep '^CONFIG_PACKAGE_ruby-yaml=y$' .config
+          grep '^CONFIG_PACKAGE_kmod-tun=y$' .config
+          grep '^CONFIG_PACKAGE_unzip=y$' .config
+          grep '^CONFIG_PACKAGE_kmod-inet-diag=y$' .config
+          grep '^CONFIG_PACKAGE_kmod-nft-tproxy=y$' .config
+
+          echo "OpenClash and dependencies OK."
 
           echo "========== Samba =========="
 
-          grep \
-            '^CONFIG_PACKAGE_samba4-server=y$' \
-            .config
+          grep '^CONFIG_PACKAGE_samba4-server=y$' .config
+          grep '^CONFIG_PACKAGE_luci-app-samba4=y$' .config
+          grep '^CONFIG_PACKAGE_luci-i18n-samba4-zh-cn=y$' .config
 
-          grep \
-            '^CONFIG_PACKAGE_luci-app-samba4=y$' \
-            .config
-
-          grep \
-            '^CONFIG_PACKAGE_luci-i18n-samba4-zh-cn=y$' \
-            .config
-
-          echo "Samba config OK."
+          echo "Samba OK."
 
           echo "========== PON =========="
 
-          grep \
-            '^CONFIG_PACKAGE_kmod-airoha-pon-frontend=y$' \
-            .config
+          grep '^CONFIG_PACKAGE_kmod-airoha-pon-frontend=y$' .config
+          grep '^CONFIG_PACKAGE_kmod-airoha-xpon=y$' .config
+          grep '^CONFIG_PACKAGE_airoha-pon-debug=y$' .config
+          grep '^CONFIG_PACKAGE_airoha-ponctl=y$' .config
+          grep '^CONFIG_PACKAGE_airoha-pond=y$' .config
+          grep '^CONFIG_PACKAGE_luci-app-pon=y$' .config
+          grep '^CONFIG_PACKAGE_luci-i18n-pon-zh-cn=y$' .config
 
-          grep \
-            '^CONFIG_PACKAGE_kmod-airoha-xpon=y$' \
-            .config
-
-          grep \
-            '^CONFIG_PACKAGE_airoha-pon-debug=y$' \
-            .config
-
-          grep \
-            '^CONFIG_PACKAGE_airoha-ponctl=y$' \
-            .config
-
-          grep \
-            '^CONFIG_PACKAGE_airoha-pond=y$' \
-            .config
-
-          grep \
-            '^CONFIG_PACKAGE_luci-app-pon=y$' \
-            .config
-
-          grep \
-            '^CONFIG_PACKAGE_luci-i18n-pon-zh-cn=y$' \
-            .config
-
-          echo "PON config OK."
+          echo "PON OK."
 
           echo "========== Simplified Chinese =========="
 
-          grep \
-            '^CONFIG_LUCI_LANG_zh_Hans=y$' \
-            .config
+          grep '^CONFIG_LUCI_LANG_zh_Hans=y$' .config
+          grep '^CONFIG_PACKAGE_luci-i18n-base-zh-cn=y$' .config
+          grep '^CONFIG_PACKAGE_luci-i18n-pon-zh-cn=y$' .config
 
-          grep \
-            '^CONFIG_PACKAGE_luci-i18n-base-zh-cn=y$' \
-            .config
-
-          echo "Simplified Chinese config OK."
+          echo "Simplified Chinese OK."
 
           echo "=========================================="
-          echo "All required configs verified."
+          echo "ALL REQUIRED CONFIGS VERIFIED."
           echo "=========================================="
+
+      # ============================================================
+      # 16. Config-only mode
+      # ============================================================
 
       - name: Upload build config
         if: ${{ inputs.config_only }}
@@ -310,15 +473,27 @@ jobs:
           include-hidden-files: true
           retention-days: 7
 
+      # ============================================================
+      # 17. Download sources
+      # ============================================================
+
       - name: Download sources
         if: ${{ !inputs.config_only }}
         run: |
           make download -j"$(nproc)"
 
+      # ============================================================
+      # 18. Build
+      # ============================================================
+
       - name: Build firmware
         if: ${{ !inputs.config_only }}
         run: |
           make -j"$(nproc)"
+
+      # ============================================================
+      # 19. Find exactly one sysupgrade.itb
+      # ============================================================
 
       - name: Collect XG-040G-MD sysupgrade firmware
         if: ${{ !inputs.config_only }}
@@ -326,41 +501,49 @@ jobs:
         run: |
           set -euo pipefail
 
+          rm -rf release
           mkdir -p release
 
-          echo "========== Generated files =========="
+          target_dir="bin/targets/airoha/an7581"
 
-          ls -lah \
-            bin/targets/airoha/an7581/
+          echo "========== Generated target files =========="
 
-          echo "========== Search sysupgrade.itb =========="
+          ls -lah "$target_dir"
+
+          echo "========== Find sysupgrade.itb =========="
 
           mapfile -t firmware_files < <(
-            find \
-              bin/targets/airoha/an7581 \
+            find "$target_dir" \
               -maxdepth 1 \
               -type f \
               -name '*sysupgrade.itb' \
               -print
           )
 
-          printf \
-            '%s\n' \
-            "${firmware_files[@]}"
+          printf '%s\n' "${firmware_files[@]}"
 
           echo "Found ${#firmware_files[@]} sysupgrade.itb file(s)."
 
           if [ "${#firmware_files[@]}" -ne 1 ]; then
-            echo "ERROR: Expected exactly 1 sysupgrade.itb."
+            echo "ERROR: Expected exactly ONE sysupgrade.itb."
             echo "ERROR: Found ${#firmware_files[@]}."
-            echo "ERROR: Refusing to upload an ambiguous firmware file."
+            exit 1
+          fi
 
+          firmware="${firmware_files[0]}"
+
+          if [ ! -s "$firmware" ]; then
+            echo "ERROR: Generated firmware is empty."
             exit 1
           fi
 
           cp -v \
-            "${firmware_files[0]}" \
+            "$firmware" \
             release/
+
+      # ============================================================
+      # 20. Final local verification
+      # ============================================================
 
       - name: Verify final firmware
         if: ${{ !inputs.config_only }}
@@ -368,13 +551,12 @@ jobs:
         run: |
           set -euo pipefail
 
-          echo "========== Final firmware =========="
+          echo "========== Final release directory =========="
 
           ls -lah release/
 
           mapfile -t final_files < <(
-            find \
-              release \
+            find release \
               -maxdepth 1 \
               -type f \
               -name '*sysupgrade.itb' \
@@ -382,24 +564,131 @@ jobs:
           )
 
           if [ "${#final_files[@]}" -ne 1 ]; then
-            echo "ERROR: Final release directory must contain exactly 1 sysupgrade.itb."
-            echo "ERROR: Found ${#final_files[@]}."
-
+            echo "ERROR: Release directory must contain exactly one ITB."
             exit 1
           fi
 
           test -s "${final_files[0]}"
 
+          echo "========== Firmware SHA256 =========="
+
+          sha256sum "${final_files[0]}"
+
           echo "=========================================="
-          echo "Exactly one XG-040G-MD sysupgrade firmware found:"
-          echo "${final_files[0]}"
+          echo "Exactly one valid sysupgrade.itb is ready."
           echo "=========================================="
 
-      - name: Upload XG-040G-MD firmware
+      # ============================================================
+      # 21. Publish raw ITB directly to GitHub Release
+      # ============================================================
+
+      - name: Publish ITB directly to GitHub Release
         if: ${{ !inputs.config_only }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: nokia-xg-040g-md-ubi-sysupgrade
-          path: release/*sysupgrade.itb
-          if-no-files-found: error
-          retention-days: 7
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          mapfile -t firmware_files < <(
+            find release \
+              -maxdepth 1 \
+              -type f \
+              -name '*sysupgrade.itb' \
+              -print
+          )
+
+          if [ "${#firmware_files[@]}" -ne 1 ]; then
+            echo "ERROR: Expected exactly one release firmware."
+            exit 1
+          fi
+
+          firmware="${firmware_files[0]}"
+
+          source_sha="$(git rev-parse HEAD)"
+          short_sha="$(git rev-parse --short=8 HEAD)"
+
+          release_tag="xg040gmd-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}-${short_sha}"
+
+          firmware_sha256="$(
+            sha256sum "$firmware" | awk '{print $1}'
+          )"
+
+          echo "========== Release =========="
+          echo "Tag: ${release_tag}"
+          echo "Source: ${source_sha}"
+          echo "Firmware: ${firmware}"
+          echo "SHA256: ${firmware_sha256}"
+          echo "============================="
+
+          gh release create \
+            "${release_tag}" \
+            "${firmware}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --target "${source_sha}" \
+            --title "Nokia XG-040G-MD ${short_sha}" \
+            --notes "Nokia XG-040G-MD UBI sysupgrade firmware.
+
+          Source commit: ${source_sha}
+
+          SHA256: ${firmware_sha256}" \
+            --prerelease
+
+      # ============================================================
+      # 22. Verify GitHub Release contains exactly one raw ITB
+      # ============================================================
+
+      - name: Verify published Release
+        if: ${{ !inputs.config_only }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          short_sha="$(git rev-parse --short=8 HEAD)"
+          release_tag="xg040gmd-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}-${short_sha}"
+
+          echo "========== Published Release =========="
+
+          gh release view \
+            "${release_tag}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --json tagName,name,assets
+
+          asset_count="$(
+            gh release view \
+              "${release_tag}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --json assets \
+              --jq '.assets | length'
+          )"
+
+          if [ "${asset_count}" -ne 1 ]; then
+            echo "ERROR: Release must contain exactly ONE asset."
+            echo "ERROR: Found ${asset_count}."
+            exit 1
+          fi
+
+          asset_name="$(
+            gh release view \
+              "${release_tag}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --json assets \
+              --jq '.assets[0].name'
+          )"
+
+          case "${asset_name}" in
+            *sysupgrade.itb)
+              ;;
+            *)
+              echo "ERROR: Release asset is not a sysupgrade.itb."
+              echo "Asset: ${asset_name}"
+              exit 1
+              ;;
+          esac
+
+          echo "=========================================="
+          echo "Release successfully published."
+          echo "Raw ITB: ${asset_name}"
+          echo "=========================================="
