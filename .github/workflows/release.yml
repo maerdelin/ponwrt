@@ -113,11 +113,8 @@ jobs:
             ponwrt-xg040gmd-
 
       # ============================================================
-      # 6. Add third-party feeds
-      #
-      # IMPORTANT:
-      # PassWall2 official build places these two feeds BEFORE
-      # the original OpenWrt/ImmortalWrt feeds.
+      # 6. Third-party feeds
+      # PassWall2 feeds are deliberately placed first
       # ============================================================
 
       - name: Configure official PassWall2 and iStore feeds
@@ -165,7 +162,7 @@ jobs:
           ./scripts/feeds install -a
 
       # ============================================================
-      # 8. Verify required source packages exist
+      # 8. Verify package sources
       # ============================================================
 
       - name: Verify package sources
@@ -213,14 +210,6 @@ jobs:
 
       # ============================================================
       # 10. Default LAN IP + hostname
-      #
-      # Upstream:
-      #   192.168.1.1
-      #   ponwrt
-      #
-      # Custom:
-      #   192.168.2.1
-      #   ImmortalWrt
       # ============================================================
 
       - name: Set default LAN IP and hostname
@@ -250,7 +239,7 @@ jobs:
 
               if count != 1:
                   raise SystemExit(
-                      f"ERROR: expected exactly one occurrence of: {old!r}, "
+                      f"ERROR: expected exactly one occurrence of {old!r}, "
                       f"found {count}"
                   )
 
@@ -272,7 +261,6 @@ jobs:
           if grep -Fq \
             'lan) ipad=${ipaddr:-"192.168.1.1"} ;;' \
             package/base-files/files/bin/config_generate; then
-
             echo "ERROR: old LAN IP still exists."
             exit 1
           fi
@@ -280,7 +268,6 @@ jobs:
           if grep -Fq \
             "set system.@system[-1].hostname='ponwrt'" \
             package/base-files/files/bin/config_generate; then
-
             echo "ERROR: old hostname still exists."
             exit 1
           fi
@@ -289,7 +276,7 @@ jobs:
           echo "Hostname default = ImmortalWrt"
 
       # ============================================================
-      # 11. UI / firmware branding
+      # 11. Branding
       # ============================================================
 
       - name: Set Argon brand to ImmortalWrt
@@ -334,7 +321,7 @@ jobs:
           grep 'VERSION_DIST:=' include/version.mk
 
       # ============================================================
-      # 12. XG-040G-MD custom config
+      # 12. Custom configuration
       # ============================================================
 
       - name: Create XG-040G-MD custom config
@@ -342,8 +329,7 @@ jobs:
           cat > /tmp/xg040gmd.config <<'EOF'
 
           # ========================================================
-          # DEVICE
-          # Nokia XG-040G-MD UBI ONLY
+          # DEVICE - Nokia XG-040G-MD UBI ONLY
           # ========================================================
 
           # CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_airoha_an7581-evb is not set
@@ -398,28 +384,24 @@ jobs:
           CONFIG_PACKAGE_luci-proto-wireguard=y
 
           # ========================================================
-          # PASSWALL2
-          #
-          # EN7581 lean configuration:
-          # SingBox only
-          # nftables / firewall4
+          # PASSWALL2 - SingBox only + nftables
           # ========================================================
 
           CONFIG_PACKAGE_luci-app-passwall2=y
           CONFIG_PACKAGE_luci-i18n-passwall2-zh-cn=y
 
-          # ---------- Basic core ----------
+          # Basic core
 
           # CONFIG_PACKAGE_luci-app-passwall2_Basic_Core_Xray is not set
           CONFIG_PACKAGE_luci-app-passwall2_Basic_Core_SingBox=y
           # CONFIG_PACKAGE_luci-app-passwall2_Basic_Core_All is not set
 
-          # ---------- Transparent proxy ----------
+          # Transparent proxy
 
           # CONFIG_PACKAGE_luci-app-passwall2_Iptables_Transparent_Proxy is not set
           CONFIG_PACKAGE_luci-app-passwall2_Nftables_Transparent_Proxy=y
 
-          # ---------- Disable optional heavy / legacy components ----------
+          # Disable optional heavy / legacy components
 
           # CONFIG_PACKAGE_luci-app-passwall2_INCLUDE_Haproxy is not set
 
@@ -461,7 +443,7 @@ jobs:
           make defconfig
 
       # ============================================================
-      # 14. STRICT CONFIG VERIFICATION
+      # 14. Strict configuration verification
       # ============================================================
 
       - name: Verify final configuration
@@ -495,10 +477,6 @@ jobs:
 
           echo "Target OK."
 
-          # --------------------------------------------------------
-          # OpenClash must NOT be installed
-          # --------------------------------------------------------
-
           echo "=========================================="
           echo "OPENCLASH"
           echo "=========================================="
@@ -506,16 +484,11 @@ jobs:
           if grep -q \
             '^CONFIG_PACKAGE_luci-app-openclash=y$' \
             .config; then
-
             echo "ERROR: OpenClash is enabled."
             exit 1
           fi
 
           echo "OpenClash disabled."
-
-          # --------------------------------------------------------
-          # iStore
-          # --------------------------------------------------------
 
           echo "=========================================="
           echo "ISTORE"
@@ -526,10 +499,6 @@ jobs:
 
           echo "iStore OK."
 
-          # --------------------------------------------------------
-          # WireGuard
-          # --------------------------------------------------------
-
           echo "=========================================="
           echo "WIREGUARD"
           echo "=========================================="
@@ -538,15 +507,10 @@ jobs:
           grep '^CONFIG_PACKAGE_wireguard-tools=y$' .config
           grep '^CONFIG_PACKAGE_luci-proto-wireguard=y$' .config
 
-          # LuCI WireGuard dependencies
           grep '^CONFIG_PACKAGE_luci-lib-uqr=y$' .config
           grep '^CONFIG_PACKAGE_resolveip=y$' .config
 
           echo "WireGuard OK."
-
-          # --------------------------------------------------------
-          # PassWall2
-          # --------------------------------------------------------
 
           echo "=========================================="
           echo "PASSWALL2"
@@ -566,10 +530,6 @@ jobs:
             .config
 
           echo "PassWall2 + SingBox + nftables selected."
-
-          # --------------------------------------------------------
-          # PassWall2 options that MUST stay disabled
-          # --------------------------------------------------------
 
           echo "=========================================="
           echo "PASSWALL2 DISABLED OPTIONS"
@@ -595,10 +555,6 @@ jobs:
           done
 
           echo "PassWall2 unwanted components disabled."
-
-          # --------------------------------------------------------
-          # PassWall2 official hard dependencies
-          # --------------------------------------------------------
 
           echo "=========================================="
           echo "PASSWALL2 DEPENDENCIES"
@@ -630,10 +586,6 @@ jobs:
 
           echo "PassWall2 dependencies OK."
 
-          # --------------------------------------------------------
-          # nftables / firewall4
-          # --------------------------------------------------------
-
           echo "=========================================="
           echo "FIREWALL4 / NFTABLES"
           echo "=========================================="
@@ -645,17 +597,14 @@ jobs:
           grep '^CONFIG_PACKAGE_dnsmasq-full=y$' .config
           grep '^CONFIG_PACKAGE_dnsmasq_full_nftset=y$' .config
 
-          grep '^CONFIG_PACKAGE_nftables=y$' .config
+          # PonWrt/ImmortalWrt current nftables package
+          grep '^CONFIG_PACKAGE_nftables-json=y$' .config
 
           grep '^CONFIG_PACKAGE_kmod-nft-socket=y$' .config
           grep '^CONFIG_PACKAGE_kmod-nft-tproxy=y$' .config
           grep '^CONFIG_PACKAGE_kmod-nft-nat=y$' .config
 
           echo "Firewall4 / nftables OK."
-
-          # --------------------------------------------------------
-          # PON
-          # --------------------------------------------------------
 
           echo "=========================================="
           echo "PON"
@@ -673,10 +622,6 @@ jobs:
 
           echo "PON OK."
 
-          # --------------------------------------------------------
-          # Samba
-          # --------------------------------------------------------
-
           echo "=========================================="
           echo "SAMBA"
           echo "=========================================="
@@ -686,10 +631,6 @@ jobs:
           grep '^CONFIG_PACKAGE_luci-i18n-samba4-zh-cn=y$' .config
 
           echo "Samba OK."
-
-          # --------------------------------------------------------
-          # Simplified Chinese
-          # --------------------------------------------------------
 
           echo "=========================================="
           echo "SIMPLIFIED CHINESE"
@@ -703,10 +644,6 @@ jobs:
           grep '^CONFIG_PACKAGE_luci-i18n-samba4-zh-cn=y$' .config
 
           echo "Simplified Chinese OK."
-
-          # --------------------------------------------------------
-          # IP / hostname
-          # --------------------------------------------------------
 
           echo "=========================================="
           echo "DEFAULT IP / HOSTNAME"
@@ -749,7 +686,7 @@ jobs:
           make download -j"$(nproc)"
 
       # ============================================================
-      # 17. Compile
+      # 17. Build
       # ============================================================
 
       - name: Build firmware
@@ -759,9 +696,6 @@ jobs:
 
       # ============================================================
       # 18. Verify actual firmware manifest
-      #
-      # This checks what was REALLY packed into the firmware,
-      # not only what .config requested.
       # ============================================================
 
       - name: Verify firmware package manifest
@@ -896,7 +830,7 @@ jobs:
           sha256sum "$firmware"
 
       # ============================================================
-      # 21. Publish raw .itb to GitHub Release
+      # 21. Publish raw ITB to GitHub Release
       # ============================================================
 
       - name: Publish raw ITB to GitHub Release
@@ -976,7 +910,6 @@ jobs:
           set -euo pipefail
 
           short_sha="$(git rev-parse --short=8 HEAD)"
-
           release_tag="xg040gmd-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}-${short_sha}"
 
           asset_count="$(
