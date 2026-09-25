@@ -34,7 +34,7 @@ jobs:
           fetch-depth: 0
 
       # ============================================================
-      # 2. Force sync latest upstream source before every build
+      # 2. Sync latest pbs05/ponwrt master before every build
       # ============================================================
 
       - name: Sync latest upstream PonWrt
@@ -51,20 +51,21 @@ jobs:
           echo "========== Fetch upstream =========="
           git fetch upstream master
 
-          echo "========== Upstream latest commit =========="
+          echo "========== Latest upstream commit =========="
           git log -1 --oneline upstream/master
 
           git checkout master
           git reset --hard upstream/master
+          git clean -fdx
 
           echo "========== Sync fork master =========="
           git push origin HEAD:master --force
 
-          echo "========== Build source =========="
+          echo "========== Actual build source =========="
           git log -1 --oneline
 
       # ============================================================
-      # 3. Free disk space
+      # 3. Free runner space
       # ============================================================
 
       - name: Free build space
@@ -75,7 +76,7 @@ jobs:
           sudo apt-get clean
 
       # ============================================================
-      # 4. Install build dependencies
+      # 4. Host build dependencies
       # ============================================================
 
       - name: Install build dependencies
@@ -96,10 +97,10 @@ jobs:
             uglifyjs unzip wget xmlto xxd zlib1g-dev zstd
 
       # ============================================================
-      # 5. Cache
+      # 5. Download cache
       # ============================================================
 
-      - name: Prepare download cache directory
+      - name: Prepare download cache
         run: |
           mkdir -p dl
 
@@ -112,26 +113,50 @@ jobs:
             ponwrt-xg040gmd-
 
       # ============================================================
-      # 6. Add official iStore feed
+      # 6. Add third-party feeds
+      #
+      # IMPORTANT:
+      # PassWall2 official build places these two feeds BEFORE
+      # the original OpenWrt/ImmortalWrt feeds.
       # ============================================================
 
-      - name: Add iStore official feed
+      - name: Configure official PassWall2 and iStore feeds
         shell: bash
         run: |
           set -euo pipefail
 
-          if ! grep -q '^src-git istore ' feeds.conf.default; then
-            echo '' >> feeds.conf.default
-            echo 'src-git istore https://github.com/linkease/istore;main' >> feeds.conf.default
-          fi
+          grep -vE \
+            '^src-git (passwall_packages|passwall2|istore) ' \
+            feeds.conf.default \
+            > /tmp/feeds.original
 
-          grep '^src-git istore ' feeds.conf.default
+          cat > feeds.conf.default <<'EOF'
+          src-git passwall_packages https://github.com/Openwrt-Passwall/openwrt-passwall-packages.git;main
+          src-git passwall2 https://github.com/Openwrt-Passwall/openwrt-passwall2.git;main
+          src-git istore https://github.com/linkease/istore;main
+          EOF
+
+          cat /tmp/feeds.original >> feeds.conf.default
+
+          echo "========== Feed order =========="
+          head -n 10 feeds.conf.default
+
+          test "$(sed -n '1p' feeds.conf.default)" = \
+            "src-git passwall_packages https://github.com/Openwrt-Passwall/openwrt-passwall-packages.git;main"
+
+          test "$(sed -n '2p' feeds.conf.default)" = \
+            "src-git passwall2 https://github.com/Openwrt-Passwall/openwrt-passwall2.git;main"
+
+          test "$(sed -n '3p' feeds.conf.default)" = \
+            "src-git istore https://github.com/linkease/istore;main"
+
+          echo "Feed priority OK."
 
       # ============================================================
-      # 7. Install all upstream feeds first
+      # 7. Update/install feeds
       # ============================================================
 
-      - name: Install feeds
+      - name: Update and install feeds
         shell: bash
         run: |
           set -euo pipefail
@@ -140,96 +165,33 @@ jobs:
           ./scripts/feeds install -a
 
       # ============================================================
-      # 8. Install iStore
+      # 8. Verify required source packages exist
       # ============================================================
 
-      - name: Install iStore
+      - name: Verify package sources
         shell: bash
         run: |
           set -euo pipefail
 
-          ./scripts/feeds install \
-            -d y \
-            -p istore \
-            luci-app-store
-
-          echo "========== iStore package check =========="
-
+          echo "========== iStore =========="
           test -f package/feeds/istore/luci-app-store/Makefile
+          echo "iStore source OK."
 
-          echo "luci-app-store package found."
+          echo "========== PassWall2 =========="
+          test -f package/feeds/passwall2/luci-app-passwall2/Makefile
+          echo "PassWall2 source OK."
 
-      # ============================================================
-      # 9. Replace feed OpenClash with latest official OpenClash
-      # ============================================================
+          echo "========== PassWall2 packages =========="
+          test -f package/feeds/passwall_packages/sing-box/Makefile
+          test -f package/feeds/passwall_packages/chinadns-ng/Makefile
+          test -f package/feeds/passwall_packages/geoview/Makefile
+          test -f package/feeds/passwall_packages/tcping/Makefile
+          test -f package/feeds/passwall_packages/v2ray-geodata/Makefile
 
-      - name: Add latest official OpenClash
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          rm -rf /tmp/OpenClash
-
-          git clone \
-            --depth 1 \
-            --filter=blob:none \
-            --sparse \
-            https://github.com/vernesong/OpenClash.git \
-            /tmp/OpenClash
-
-          git -C /tmp/OpenClash \
-            sparse-checkout set luci-app-openclash
-
-          echo "========== OpenClash latest commit =========="
-          git -C /tmp/OpenClash log -1 --oneline
-
-          echo "========== OpenClash version =========="
-          grep '^PKG_VERSION:=' \
-            /tmp/OpenClash/luci-app-openclash/Makefile
-
-          # Remove ImmortalWrt feed copy to avoid duplicate package definition
-          rm -rf package/feeds/luci/luci-app-openclash
-
-          # Remove previous local copy
-          rm -rf package/luci-app-openclash
-
-          # Install latest official OpenClash as local/core package
-          cp -a \
-            /tmp/OpenClash/luci-app-openclash \
-            package/luci-app-openclash
-
-          test -f package/luci-app-openclash/Makefile
+          echo "PassWall2 package sources OK."
 
       # ============================================================
-      # 10. Verify OpenClash dependencies actually exist in package tree
-      # ============================================================
-
-      - name: Verify OpenClash dependency packages
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          echo "========== OpenClash dependency package tree =========="
-
-          test -f package/feeds/luci/luci-compat/Makefile
-          echo "luci-compat OK"
-
-          test -e package/feeds/packages/bash
-          echo "bash OK"
-
-          test -e package/feeds/packages/curl
-          echo "curl OK"
-
-          test -e package/feeds/packages/ruby
-          echo "ruby OK"
-
-          test -e package/feeds/packages/unzip
-          echo "unzip OK"
-
-          echo "OpenClash dependency package tree OK."
-
-      # ============================================================
-      # 11. Repository signing key
+      # 9. Signing key
       # ============================================================
 
       - name: Load repository signing key
@@ -250,38 +212,139 @@ jobs:
           fi
 
       # ============================================================
-      # 12. Branding
+      # 10. Default LAN IP + hostname
+      #
+      # Upstream:
+      #   192.168.1.1
+      #   ponwrt
+      #
+      # Custom:
+      #   192.168.2.1
+      #   ImmortalWrt
+      # ============================================================
+
+      - name: Set default LAN IP and hostname
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path("package/base-files/files/bin/config_generate")
+          data = path.read_text()
+
+          replacements = [
+              (
+                  'lan) ipad=${ipaddr:-"192.168.1.1"} ;;',
+                  'lan) ipad=${ipaddr:-"192.168.2.1"} ;;'
+              ),
+              (
+                  "set system.@system[-1].hostname='ponwrt'",
+                  "set system.@system[-1].hostname='ImmortalWrt'"
+              ),
+          ]
+
+          for old, new in replacements:
+              count = data.count(old)
+
+              if count != 1:
+                  raise SystemExit(
+                      f"ERROR: expected exactly one occurrence of: {old!r}, "
+                      f"found {count}"
+                  )
+
+              data = data.replace(old, new, 1)
+
+          path.write_text(data)
+          PY
+
+          echo "========== Verify network defaults =========="
+
+          grep -F \
+            'lan) ipad=${ipaddr:-"192.168.2.1"} ;;' \
+            package/base-files/files/bin/config_generate
+
+          grep -F \
+            "set system.@system[-1].hostname='ImmortalWrt'" \
+            package/base-files/files/bin/config_generate
+
+          if grep -Fq \
+            'lan) ipad=${ipaddr:-"192.168.1.1"} ;;' \
+            package/base-files/files/bin/config_generate; then
+
+            echo "ERROR: old LAN IP still exists."
+            exit 1
+          fi
+
+          if grep -Fq \
+            "set system.@system[-1].hostname='ponwrt'" \
+            package/base-files/files/bin/config_generate; then
+
+            echo "ERROR: old hostname still exists."
+            exit 1
+          fi
+
+          echo "LAN default = 192.168.2.1"
+          echo "Hostname default = ImmortalWrt"
+
+      # ============================================================
+      # 11. UI / firmware branding
       # ============================================================
 
       - name: Set Argon brand to ImmortalWrt
+        shell: bash
         run: |
-          sed -i \
-            's/{{ hostname }}/ImmortalWrt/g' \
-            feeds/luci/themes/luci-theme-argon/ucode/template/themes/argon/header.ut
+          set -euo pipefail
 
-          grep 'class="brand"' \
-            feeds/luci/themes/luci-theme-argon/ucode/template/themes/argon/header.ut
+          header="feeds/luci/themes/luci-theme-argon/ucode/template/themes/argon/header.ut"
+
+          test -f "$header"
+
+          if grep -q '{{ hostname }}' "$header"; then
+            sed -i 's/{{ hostname }}/ImmortalWrt/g' "$header"
+          fi
+
+          grep -q 'ImmortalWrt' "$header"
 
       - name: Set firmware brand to ImmortalWrt
+        shell: bash
         run: |
-          sed -i \
-            's/VERSION_DIST:=$(if $(VERSION_DIST),$(VERSION_DIST),PonWrt)/VERSION_DIST:=$(if $(VERSION_DIST),$(VERSION_DIST),ImmortalWrt)/' \
-            include/version.mk
+          set -euo pipefail
 
-          grep 'VERSION_DIST:=' \
-            include/version.mk
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path("include/version.mk")
+          data = path.read_text()
+
+          old = "VERSION_DIST:=$(if $(VERSION_DIST),$(VERSION_DIST),PonWrt)"
+          new = "VERSION_DIST:=$(if $(VERSION_DIST),$(VERSION_DIST),ImmortalWrt)"
+
+          if old in data:
+              data = data.replace(old, new, 1)
+              path.write_text(data)
+
+          data = path.read_text()
+
+          if new not in data:
+              raise SystemExit("ERROR: VERSION_DIST was not set to ImmortalWrt")
+          PY
+
+          grep 'VERSION_DIST:=' include/version.mk
 
       # ============================================================
-      # 13. XG-040G-MD single-device custom config
+      # 12. XG-040G-MD custom config
       # ============================================================
 
       - name: Create XG-040G-MD custom config
         run: |
           cat > /tmp/xg040gmd.config <<'EOF'
 
-          # --------------------------------------------------------
-          # Only build Nokia XG-040G-MD UBI
-          # --------------------------------------------------------
+          # ========================================================
+          # DEVICE
+          # Nokia XG-040G-MD UBI ONLY
+          # ========================================================
 
           # CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_airoha_an7581-evb is not set
           # CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_airoha_an7581-evb-emmc-eagle is not set
@@ -307,41 +370,71 @@ jobs:
 
           CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_nokia_xg-040g-md-ubi=y
 
-          # --------------------------------------------------------
-          # iStore
-          # --------------------------------------------------------
+          # ========================================================
+          # OPENCLASH DISABLED
+          # ========================================================
+
+          # CONFIG_PACKAGE_luci-app-openclash is not set
+
+          # ========================================================
+          # PASSWALL V1 DISABLED
+          # ========================================================
+
+          # CONFIG_PACKAGE_luci-app-passwall is not set
+
+          # ========================================================
+          # ISTORE
+          # ========================================================
 
           CONFIG_PACKAGE_luci-app-store=y
           CONFIG_PACKAGE_xz-utils=y
 
-          # --------------------------------------------------------
-          # OpenClash
-          # --------------------------------------------------------
+          # ========================================================
+          # WIREGUARD
+          # ========================================================
 
-          CONFIG_PACKAGE_luci-app-openclash=y
+          CONFIG_PACKAGE_kmod-wireguard=y
+          CONFIG_PACKAGE_wireguard-tools=y
+          CONFIG_PACKAGE_luci-proto-wireguard=y
 
-          # Critical LuCI compatibility package.
-          # Provides /usr/lib/lua/luci/cbi/datatypes.lua
-          CONFIG_PACKAGE_luci-compat=y
+          # ========================================================
+          # PASSWALL2
+          #
+          # EN7581 lean configuration:
+          # SingBox only
+          # nftables / firewall4
+          # ========================================================
 
-          # OpenClash hard runtime dependencies
-          CONFIG_PACKAGE_dnsmasq-full=y
-          CONFIG_PACKAGE_bash=y
-          CONFIG_PACKAGE_curl=y
-          CONFIG_PACKAGE_ca-bundle=y
-          CONFIG_PACKAGE_ip-full=y
-          CONFIG_PACKAGE_ruby=y
-          CONFIG_PACKAGE_ruby-yaml=y
-          CONFIG_PACKAGE_kmod-tun=y
-          CONFIG_PACKAGE_unzip=y
+          CONFIG_PACKAGE_luci-app-passwall2=y
+          CONFIG_PACKAGE_luci-i18n-passwall2-zh-cn=y
 
-          # OpenClash runtime helper dependencies
-          CONFIG_PACKAGE_kmod-inet-diag=y
-          CONFIG_PACKAGE_kmod-nft-tproxy=y
+          # ---------- Basic core ----------
 
-          # --------------------------------------------------------
-          # Samba
-          # --------------------------------------------------------
+          # CONFIG_PACKAGE_luci-app-passwall2_Basic_Core_Xray is not set
+          CONFIG_PACKAGE_luci-app-passwall2_Basic_Core_SingBox=y
+          # CONFIG_PACKAGE_luci-app-passwall2_Basic_Core_All is not set
+
+          # ---------- Transparent proxy ----------
+
+          # CONFIG_PACKAGE_luci-app-passwall2_Iptables_Transparent_Proxy is not set
+          CONFIG_PACKAGE_luci-app-passwall2_Nftables_Transparent_Proxy=y
+
+          # ---------- Disable optional heavy / legacy components ----------
+
+          # CONFIG_PACKAGE_luci-app-passwall2_INCLUDE_Haproxy is not set
+
+          # CONFIG_PACKAGE_luci-app-passwall2_INCLUDE_Shadowsocks_Rust_Client is not set
+          # CONFIG_PACKAGE_luci-app-passwall2_INCLUDE_Shadowsocks_Rust_Server is not set
+
+          # CONFIG_PACKAGE_luci-app-passwall2_INCLUDE_ShadowsocksR_Libev_Client is not set
+          # CONFIG_PACKAGE_luci-app-passwall2_INCLUDE_ShadowsocksR_Libev_Server is not set
+
+          # CONFIG_PACKAGE_luci-app-passwall2_INCLUDE_Simple_Obfs is not set
+          # CONFIG_PACKAGE_luci-app-passwall2_INCLUDE_V2ray_Plugin is not set
+
+          # ========================================================
+          # SAMBA
+          # ========================================================
 
           CONFIG_PACKAGE_samba4-server=y
           CONFIG_PACKAGE_luci-app-samba4=y
@@ -350,7 +443,7 @@ jobs:
           EOF
 
       # ============================================================
-      # 14. Generate final config
+      # 13. Merge configuration
       # ============================================================
 
       - name: Configure XG-040G-MD
@@ -368,15 +461,17 @@ jobs:
           make defconfig
 
       # ============================================================
-      # 15. Strict pre-build verification
+      # 14. STRICT CONFIG VERIFICATION
       # ============================================================
 
-      - name: Verify target and packages
+      - name: Verify final configuration
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "========== Target =========="
+          echo "=========================================="
+          echo "TARGET"
+          echo "=========================================="
 
           grep \
             '^CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_.*=y' \
@@ -389,8 +484,8 @@ jobs:
           )"
 
           if [ "$target_count" -ne 1 ]; then
-            echo "ERROR: Expected exactly one AN7581 device."
-            echo "ERROR: Found ${target_count}."
+            echo "ERROR: expected exactly one AN7581 device."
+            echo "Found: ${target_count}"
             exit 1
           fi
 
@@ -398,37 +493,193 @@ jobs:
             '^CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_nokia_xg-040g-md-ubi=y$' \
             .config
 
-          echo "XG-040G-MD target OK."
+          echo "Target OK."
 
-          echo "========== iStore =========="
+          # --------------------------------------------------------
+          # OpenClash must NOT be installed
+          # --------------------------------------------------------
+
+          echo "=========================================="
+          echo "OPENCLASH"
+          echo "=========================================="
+
+          if grep -q \
+            '^CONFIG_PACKAGE_luci-app-openclash=y$' \
+            .config; then
+
+            echo "ERROR: OpenClash is enabled."
+            exit 1
+          fi
+
+          echo "OpenClash disabled."
+
+          # --------------------------------------------------------
+          # iStore
+          # --------------------------------------------------------
+
+          echo "=========================================="
+          echo "ISTORE"
+          echo "=========================================="
 
           grep '^CONFIG_PACKAGE_luci-app-store=y$' .config
           grep '^CONFIG_PACKAGE_xz-utils=y$' .config
 
           echo "iStore OK."
 
-          echo "========== OpenClash =========="
+          # --------------------------------------------------------
+          # WireGuard
+          # --------------------------------------------------------
 
-          grep '^CONFIG_PACKAGE_luci-app-openclash=y$' .config
+          echo "=========================================="
+          echo "WIREGUARD"
+          echo "=========================================="
 
-          echo "========== OpenClash runtime dependencies =========="
+          grep '^CONFIG_PACKAGE_kmod-wireguard=y$' .config
+          grep '^CONFIG_PACKAGE_wireguard-tools=y$' .config
+          grep '^CONFIG_PACKAGE_luci-proto-wireguard=y$' .config
+
+          # LuCI WireGuard dependencies
+          grep '^CONFIG_PACKAGE_luci-lib-uqr=y$' .config
+          grep '^CONFIG_PACKAGE_resolveip=y$' .config
+
+          echo "WireGuard OK."
+
+          # --------------------------------------------------------
+          # PassWall2
+          # --------------------------------------------------------
+
+          echo "=========================================="
+          echo "PASSWALL2"
+          echo "=========================================="
+
+          grep '^CONFIG_PACKAGE_luci-app-passwall2=y$' .config
+          grep '^CONFIG_PACKAGE_luci-i18n-passwall2-zh-cn=y$' .config
+
+          grep \
+            '^CONFIG_PACKAGE_luci-app-passwall2_Basic_Core_SingBox=y$' \
+            .config
+
+          grep '^CONFIG_PACKAGE_sing-box=y$' .config
+
+          grep \
+            '^CONFIG_PACKAGE_luci-app-passwall2_Nftables_Transparent_Proxy=y$' \
+            .config
+
+          echo "PassWall2 + SingBox + nftables selected."
+
+          # --------------------------------------------------------
+          # PassWall2 options that MUST stay disabled
+          # --------------------------------------------------------
+
+          echo "=========================================="
+          echo "PASSWALL2 DISABLED OPTIONS"
+          echo "=========================================="
+
+          for option in \
+            CONFIG_PACKAGE_luci-app-passwall2_Basic_Core_Xray \
+            CONFIG_PACKAGE_luci-app-passwall2_Basic_Core_All \
+            CONFIG_PACKAGE_luci-app-passwall2_Iptables_Transparent_Proxy \
+            CONFIG_PACKAGE_luci-app-passwall2_INCLUDE_Haproxy \
+            CONFIG_PACKAGE_luci-app-passwall2_INCLUDE_Shadowsocks_Rust_Client \
+            CONFIG_PACKAGE_luci-app-passwall2_INCLUDE_Shadowsocks_Rust_Server \
+            CONFIG_PACKAGE_luci-app-passwall2_INCLUDE_ShadowsocksR_Libev_Client \
+            CONFIG_PACKAGE_luci-app-passwall2_INCLUDE_ShadowsocksR_Libev_Server \
+            CONFIG_PACKAGE_luci-app-passwall2_INCLUDE_Simple_Obfs \
+            CONFIG_PACKAGE_luci-app-passwall2_INCLUDE_V2ray_Plugin
+          do
+            if grep -q "^${option}=y$" .config; then
+              echo "ERROR: unexpected PassWall2 option enabled:"
+              echo "${option}"
+              exit 1
+            fi
+          done
+
+          echo "PassWall2 unwanted components disabled."
+
+          # --------------------------------------------------------
+          # PassWall2 official hard dependencies
+          # --------------------------------------------------------
+
+          echo "=========================================="
+          echo "PASSWALL2 DEPENDENCIES"
+          echo "=========================================="
+
+          grep '^CONFIG_PACKAGE_coreutils=y$' .config
+          grep '^CONFIG_PACKAGE_coreutils-base64=y$' .config
+          grep '^CONFIG_PACKAGE_coreutils-nohup=y$' .config
+          grep '^CONFIG_PACKAGE_coreutils-timeout=y$' .config
+
+          grep '^CONFIG_PACKAGE_curl=y$' .config
+          grep '^CONFIG_PACKAGE_ip-full=y$' .config
+
+          grep '^CONFIG_PACKAGE_libuci-lua=y$' .config
+          grep '^CONFIG_PACKAGE_lua=y$' .config
 
           grep '^CONFIG_PACKAGE_luci-compat=y$' .config
-          grep '^CONFIG_PACKAGE_dnsmasq-full=y$' .config
-          grep '^CONFIG_PACKAGE_bash=y$' .config
-          grep '^CONFIG_PACKAGE_curl=y$' .config
-          grep '^CONFIG_PACKAGE_ca-bundle=y$' .config
-          grep '^CONFIG_PACKAGE_ip-full=y$' .config
-          grep '^CONFIG_PACKAGE_ruby=y$' .config
-          grep '^CONFIG_PACKAGE_ruby-yaml=y$' .config
-          grep '^CONFIG_PACKAGE_kmod-tun=y$' .config
+          grep '^CONFIG_PACKAGE_luci-lib-jsonc=y$' .config
+
+          grep '^CONFIG_PACKAGE_lyaml=y$' .config
+          grep '^CONFIG_PACKAGE_resolveip=y$' .config
+          grep '^CONFIG_PACKAGE_tcping=y$' .config
+          grep '^CONFIG_PACKAGE_geoview=y$' .config
+
+          grep '^CONFIG_PACKAGE_v2ray-geoip=y$' .config
+          grep '^CONFIG_PACKAGE_v2ray-geosite=y$' .config
+
           grep '^CONFIG_PACKAGE_unzip=y$' .config
-          grep '^CONFIG_PACKAGE_kmod-inet-diag=y$' .config
+
+          echo "PassWall2 dependencies OK."
+
+          # --------------------------------------------------------
+          # nftables / firewall4
+          # --------------------------------------------------------
+
+          echo "=========================================="
+          echo "FIREWALL4 / NFTABLES"
+          echo "=========================================="
+
+          grep '^CONFIG_PACKAGE_firewall4=y$' .config
+
+          grep '^CONFIG_PACKAGE_chinadns-ng=y$' .config
+
+          grep '^CONFIG_PACKAGE_dnsmasq-full=y$' .config
+          grep '^CONFIG_PACKAGE_dnsmasq_full_nftset=y$' .config
+
+          grep '^CONFIG_PACKAGE_nftables=y$' .config
+
+          grep '^CONFIG_PACKAGE_kmod-nft-socket=y$' .config
           grep '^CONFIG_PACKAGE_kmod-nft-tproxy=y$' .config
+          grep '^CONFIG_PACKAGE_kmod-nft-nat=y$' .config
 
-          echo "OpenClash and dependencies OK."
+          echo "Firewall4 / nftables OK."
 
-          echo "========== Samba =========="
+          # --------------------------------------------------------
+          # PON
+          # --------------------------------------------------------
+
+          echo "=========================================="
+          echo "PON"
+          echo "=========================================="
+
+          grep '^CONFIG_PACKAGE_kmod-airoha-pon-frontend=y$' .config
+          grep '^CONFIG_PACKAGE_kmod-airoha-xpon=y$' .config
+
+          grep '^CONFIG_PACKAGE_airoha-pon-debug=y$' .config
+          grep '^CONFIG_PACKAGE_airoha-ponctl=y$' .config
+          grep '^CONFIG_PACKAGE_airoha-pond=y$' .config
+
+          grep '^CONFIG_PACKAGE_luci-app-pon=y$' .config
+          grep '^CONFIG_PACKAGE_luci-i18n-pon-zh-cn=y$' .config
+
+          echo "PON OK."
+
+          # --------------------------------------------------------
+          # Samba
+          # --------------------------------------------------------
+
+          echo "=========================================="
+          echo "SAMBA"
+          echo "=========================================="
 
           grep '^CONFIG_PACKAGE_samba4-server=y$' .config
           grep '^CONFIG_PACKAGE_luci-app-samba4=y$' .config
@@ -436,32 +687,47 @@ jobs:
 
           echo "Samba OK."
 
-          echo "========== PON =========="
+          # --------------------------------------------------------
+          # Simplified Chinese
+          # --------------------------------------------------------
 
-          grep '^CONFIG_PACKAGE_kmod-airoha-pon-frontend=y$' .config
-          grep '^CONFIG_PACKAGE_kmod-airoha-xpon=y$' .config
-          grep '^CONFIG_PACKAGE_airoha-pon-debug=y$' .config
-          grep '^CONFIG_PACKAGE_airoha-ponctl=y$' .config
-          grep '^CONFIG_PACKAGE_airoha-pond=y$' .config
-          grep '^CONFIG_PACKAGE_luci-app-pon=y$' .config
-          grep '^CONFIG_PACKAGE_luci-i18n-pon-zh-cn=y$' .config
-
-          echo "PON OK."
-
-          echo "========== Simplified Chinese =========="
+          echo "=========================================="
+          echo "SIMPLIFIED CHINESE"
+          echo "=========================================="
 
           grep '^CONFIG_LUCI_LANG_zh_Hans=y$' .config
+
           grep '^CONFIG_PACKAGE_luci-i18n-base-zh-cn=y$' .config
           grep '^CONFIG_PACKAGE_luci-i18n-pon-zh-cn=y$' .config
+          grep '^CONFIG_PACKAGE_luci-i18n-passwall2-zh-cn=y$' .config
+          grep '^CONFIG_PACKAGE_luci-i18n-samba4-zh-cn=y$' .config
 
           echo "Simplified Chinese OK."
 
+          # --------------------------------------------------------
+          # IP / hostname
+          # --------------------------------------------------------
+
           echo "=========================================="
-          echo "ALL REQUIRED CONFIGS VERIFIED."
+          echo "DEFAULT IP / HOSTNAME"
+          echo "=========================================="
+
+          grep -F \
+            'lan) ipad=${ipaddr:-"192.168.2.1"} ;;' \
+            package/base-files/files/bin/config_generate
+
+          grep -F \
+            "set system.@system[-1].hostname='ImmortalWrt'" \
+            package/base-files/files/bin/config_generate
+
+          echo "192.168.2.1 / ImmortalWrt OK."
+
+          echo "=========================================="
+          echo "ALL PRE-BUILD CHECKS PASSED"
           echo "=========================================="
 
       # ============================================================
-      # 16. Config-only mode
+      # 15. Config-only test mode
       # ============================================================
 
       - name: Upload build config
@@ -474,7 +740,7 @@ jobs:
           retention-days: 7
 
       # ============================================================
-      # 17. Download sources
+      # 16. Download sources
       # ============================================================
 
       - name: Download sources
@@ -483,7 +749,7 @@ jobs:
           make download -j"$(nproc)"
 
       # ============================================================
-      # 18. Build
+      # 17. Compile
       # ============================================================
 
       - name: Build firmware
@@ -492,10 +758,74 @@ jobs:
           make -j"$(nproc)"
 
       # ============================================================
-      # 19. Find exactly one sysupgrade.itb
+      # 18. Verify actual firmware manifest
+      #
+      # This checks what was REALLY packed into the firmware,
+      # not only what .config requested.
       # ============================================================
 
-      - name: Collect XG-040G-MD sysupgrade firmware
+      - name: Verify firmware package manifest
+        if: ${{ !inputs.config_only }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          target_dir="bin/targets/airoha/an7581"
+
+          echo "========== Target output =========="
+          ls -lah "$target_dir"
+
+          mapfile -t manifests < <(
+            find "$target_dir" \
+              -maxdepth 1 \
+              -type f \
+              -name '*.manifest' \
+              -print
+          )
+
+          if [ "${#manifests[@]}" -ne 1 ]; then
+            echo "ERROR: expected exactly one device manifest."
+            echo "Found ${#manifests[@]}."
+            printf '%s\n' "${manifests[@]}"
+            exit 1
+          fi
+
+          manifest="${manifests[0]}"
+
+          echo "========== Manifest =========="
+          echo "$manifest"
+
+          for pkg in \
+            luci-app-store \
+            kmod-wireguard \
+            wireguard-tools \
+            luci-proto-wireguard \
+            luci-app-passwall2 \
+            sing-box \
+            chinadns-ng \
+            luci-app-pon \
+            airoha-ponctl \
+            airoha-pond \
+            samba4-server
+          do
+            if ! grep -q "^${pkg} " "$manifest"; then
+              echo "ERROR: firmware manifest is missing package: ${pkg}"
+              exit 1
+            fi
+          done
+
+          if grep -q '^luci-app-openclash ' "$manifest"; then
+            echo "ERROR: OpenClash unexpectedly exists in firmware."
+            exit 1
+          fi
+
+          echo "Actual firmware package manifest OK."
+
+      # ============================================================
+      # 19. Collect exactly one sysupgrade.itb
+      # ============================================================
+
+      - name: Collect XG-040G-MD firmware
         if: ${{ !inputs.config_only }}
         shell: bash
         run: |
@@ -506,12 +836,6 @@ jobs:
 
           target_dir="bin/targets/airoha/an7581"
 
-          echo "========== Generated target files =========="
-
-          ls -lah "$target_dir"
-
-          echo "========== Find sysupgrade.itb =========="
-
           mapfile -t firmware_files < <(
             find "$target_dir" \
               -maxdepth 1 \
@@ -520,29 +844,26 @@ jobs:
               -print
           )
 
+          echo "========== sysupgrade.itb candidates =========="
           printf '%s\n' "${firmware_files[@]}"
 
-          echo "Found ${#firmware_files[@]} sysupgrade.itb file(s)."
-
           if [ "${#firmware_files[@]}" -ne 1 ]; then
-            echo "ERROR: Expected exactly ONE sysupgrade.itb."
-            echo "ERROR: Found ${#firmware_files[@]}."
+            echo "ERROR: expected exactly one sysupgrade.itb."
+            echo "Found ${#firmware_files[@]}."
             exit 1
           fi
 
           firmware="${firmware_files[0]}"
 
           if [ ! -s "$firmware" ]; then
-            echo "ERROR: Generated firmware is empty."
+            echo "ERROR: firmware is empty."
             exit 1
           fi
 
-          cp -v \
-            "$firmware" \
-            release/
+          cp -v "$firmware" release/
 
       # ============================================================
-      # 20. Final local verification
+      # 20. Final firmware validation
       # ============================================================
 
       - name: Verify final firmware
@@ -550,10 +871,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
-          echo "========== Final release directory =========="
-
-          ls -lah release/
 
           mapfile -t final_files < <(
             find release \
@@ -564,25 +881,25 @@ jobs:
           )
 
           if [ "${#final_files[@]}" -ne 1 ]; then
-            echo "ERROR: Release directory must contain exactly one ITB."
+            echo "ERROR: release directory must contain exactly one ITB."
             exit 1
           fi
 
-          test -s "${final_files[0]}"
+          firmware="${final_files[0]}"
 
-          echo "========== Firmware SHA256 =========="
+          test -s "$firmware"
 
-          sha256sum "${final_files[0]}"
+          echo "========== Final firmware =========="
+          ls -lh "$firmware"
 
-          echo "=========================================="
-          echo "Exactly one valid sysupgrade.itb is ready."
-          echo "=========================================="
+          echo "========== SHA256 =========="
+          sha256sum "$firmware"
 
       # ============================================================
-      # 21. Publish raw ITB directly to GitHub Release
+      # 21. Publish raw .itb to GitHub Release
       # ============================================================
 
-      - name: Publish ITB directly to GitHub Release
+      - name: Publish raw ITB to GitHub Release
         if: ${{ !inputs.config_only }}
         shell: bash
         env:
@@ -599,7 +916,7 @@ jobs:
           )
 
           if [ "${#firmware_files[@]}" -ne 1 ]; then
-            echo "ERROR: Expected exactly one release firmware."
+            echo "ERROR: expected exactly one firmware."
             exit 1
           fi
 
@@ -619,7 +936,6 @@ jobs:
           echo "Source: ${source_sha}"
           echo "Firmware: ${firmware}"
           echo "SHA256: ${firmware_sha256}"
-          echo "============================="
 
           gh release create \
             "${release_tag}" \
@@ -629,13 +945,26 @@ jobs:
             --title "Nokia XG-040G-MD ${short_sha}" \
             --notes "Nokia XG-040G-MD UBI sysupgrade firmware.
 
+          Default LAN IP: 192.168.2.1
+          Default hostname: ImmortalWrt
+
+          Proxy:
+          PassWall2 + SingBox + nftables
+
+          VPN:
+          WireGuard
+
+          OpenClash:
+          Not included
+
           Source commit: ${source_sha}
 
-          SHA256: ${firmware_sha256}" \
+          SHA256:
+          ${firmware_sha256}" \
             --prerelease
 
       # ============================================================
-      # 22. Verify GitHub Release contains exactly one raw ITB
+      # 22. Verify published Release
       # ============================================================
 
       - name: Verify published Release
@@ -647,14 +976,8 @@ jobs:
           set -euo pipefail
 
           short_sha="$(git rev-parse --short=8 HEAD)"
+
           release_tag="xg040gmd-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}-${short_sha}"
-
-          echo "========== Published Release =========="
-
-          gh release view \
-            "${release_tag}" \
-            --repo "${GITHUB_REPOSITORY}" \
-            --json tagName,name,assets
 
           asset_count="$(
             gh release view \
@@ -665,8 +988,8 @@ jobs:
           )"
 
           if [ "${asset_count}" -ne 1 ]; then
-            echo "ERROR: Release must contain exactly ONE asset."
-            echo "ERROR: Found ${asset_count}."
+            echo "ERROR: Release must contain exactly one uploaded asset."
+            echo "Found: ${asset_count}"
             exit 1
           fi
 
@@ -682,13 +1005,13 @@ jobs:
             *sysupgrade.itb)
               ;;
             *)
-              echo "ERROR: Release asset is not a sysupgrade.itb."
+              echo "ERROR: Release asset is not sysupgrade.itb."
               echo "Asset: ${asset_name}"
               exit 1
               ;;
           esac
 
           echo "=========================================="
-          echo "Release successfully published."
-          echo "Raw ITB: ${asset_name}"
+          echo "BUILD SUCCESS"
+          echo "Raw firmware: ${asset_name}"
           echo "=========================================="
