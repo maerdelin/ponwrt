@@ -34,7 +34,7 @@ jobs:
           fetch-depth: 0
 
       # ============================================================
-      # 2. Sync latest pbs05/ponwrt master before every build
+      # 2. Sync latest upstream
       # ============================================================
 
       - name: Sync latest upstream PonWrt
@@ -76,7 +76,7 @@ jobs:
           sudo apt-get clean
 
       # ============================================================
-      # 4. Host build dependencies
+      # 4. Build dependencies
       # ============================================================
 
       - name: Install build dependencies
@@ -97,7 +97,7 @@ jobs:
             uglifyjs unzip wget xmlto xxd zlib1g-dev zstd
 
       # ============================================================
-      # 5. Download cache
+      # 5. Cache
       # ============================================================
 
       - name: Prepare download cache
@@ -113,8 +113,7 @@ jobs:
             ponwrt-xg040gmd-
 
       # ============================================================
-      # 6. Third-party feeds
-      # PassWall2 feeds are deliberately placed first
+      # 6. Feeds
       # ============================================================
 
       - name: Configure official PassWall2 and iStore feeds
@@ -162,7 +161,7 @@ jobs:
           ./scripts/feeds install -a
 
       # ============================================================
-      # 8. Verify package sources
+      # 8. Verify third-party package sources
       # ============================================================
 
       - name: Verify package sources
@@ -170,25 +169,243 @@ jobs:
         run: |
           set -euo pipefail
 
-          echo "========== iStore =========="
           test -f package/feeds/istore/luci-app-store/Makefile
-          echo "iStore source OK."
 
-          echo "========== PassWall2 =========="
           test -f package/feeds/passwall2/luci-app-passwall2/Makefile
-          echo "PassWall2 source OK."
 
-          echo "========== PassWall2 packages =========="
           test -f package/feeds/passwall_packages/sing-box/Makefile
           test -f package/feeds/passwall_packages/chinadns-ng/Makefile
           test -f package/feeds/passwall_packages/geoview/Makefile
           test -f package/feeds/passwall_packages/tcping/Makefile
           test -f package/feeds/passwall_packages/v2ray-geodata/Makefile
 
-          echo "PassWall2 package sources OK."
+          echo "Third-party package sources OK."
 
       # ============================================================
-      # 9. Signing key
+      # 9. STRICT XG-040G-MD HARDWARE PROFILE SOURCE CHECK
+      #
+      # Make sure single-device build cannot silently lose:
+      #
+      # NPU / PPE
+      # PON / EN7572 / XPON
+      # LAN1 EN8811H 2.5G
+      # LAN2/LAN3/LAN4
+      # ============================================================
+
+      - name: Verify XG-040G-MD hardware profile
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "=========================================="
+          echo "XG-040G-MD DEVICE PROFILE"
+          echo "=========================================="
+
+          image_file="target/linux/airoha/image/an7581.mk"
+
+          test -f "$image_file"
+
+          device_block="$(
+            awk '
+              /define Device\/nokia_xg-040g-md-common/ { p=1 }
+              p { print }
+              p && /^endef$/ { exit }
+            ' "$image_file"
+          )"
+
+          echo "$device_block"
+
+          for pkg in \
+            kmod-gpio-button-hotplug \
+            kmod-leds-gpio \
+            kmod-phy-airoha-en8811h \
+            kmod-regulator-userspace-consumer \
+            kmod-usb-ledtrig-usbport \
+            kmod-usb3 \
+            kmod-airoha-en7572 \
+            kmod-airoha-xpon \
+            airoha-ponctl \
+            airoha-pond
+          do
+            if ! grep -qw "$pkg" <<<"$device_block"; then
+              echo "ERROR: XG-040G-MD DEVICE_PACKAGES missing:"
+              echo "$pkg"
+              exit 1
+            fi
+          done
+
+          echo "XG-040G-MD DEVICE_PACKAGES OK."
+
+          echo "=========================================="
+          echo "AN7581 DEFAULT NPU FIRMWARE"
+          echo "=========================================="
+
+          target_file="target/linux/airoha/an7581/target.mk"
+
+          test -f "$target_file"
+
+          grep -q \
+            'airoha-en7581-npu-firmware' \
+            "$target_file"
+
+          echo "AN7581 NPU firmware default OK."
+
+          echo "=========================================="
+          echo "AN7581 KERNEL NETWORK DRIVERS"
+          echo "=========================================="
+
+          mapfile -t kernel_cfg_candidates < <(
+            grep -l \
+              '^CONFIG_NET_AIROHA_NPU=y$' \
+              target/linux/airoha/an7581/config-* \
+              2>/dev/null || true
+          )
+
+          if [ "${#kernel_cfg_candidates[@]}" -ne 1 ]; then
+            echo "ERROR: unable to identify exactly one AN7581 kernel config."
+            printf '%s\n' "${kernel_cfg_candidates[@]}"
+            exit 1
+          fi
+
+          kernel_cfg="${kernel_cfg_candidates[0]}"
+
+          echo "Kernel config:"
+          echo "$kernel_cfg"
+
+          for symbol in \
+            CONFIG_NET_VENDOR_AIROHA \
+            CONFIG_NET_AIROHA \
+            CONFIG_NET_AIROHA_NPU \
+            CONFIG_NET_DSA \
+            CONFIG_NET_DEVLINK \
+            CONFIG_PCS_AIROHA \
+            CONFIG_PCS_AIROHA_AN7581 \
+            CONFIG_PHYLIB \
+            CONFIG_PHYLINK \
+            CONFIG_FIXED_PHY \
+            CONFIG_SWPHY
+          do
+            if ! grep -q "^${symbol}=y$" "$kernel_cfg"; then
+              echo "ERROR: required AN7581 kernel driver missing:"
+              echo "$symbol"
+              exit 1
+            fi
+          done
+
+          echo "AN7581 kernel Ethernet/NPU/PCS/DSA drivers OK."
+
+          # --------------------------------------------------------
+          # Nokia common DTS
+          # --------------------------------------------------------
+
+          echo "=========================================="
+          echo "NOKIA XG-040G PON / WAN DTS"
+          echo "=========================================="
+
+          common_dts="target/linux/airoha/dts/an758x-nokia_xg-040g-common.dtsi"
+
+          test -f "$common_dts"
+
+          grep -Fq '&npu {' "$common_dts"
+          grep -Fq '&pon_pcs {' "$common_dts"
+          grep -Fq '&xpon_mac {' "$common_dts"
+
+          grep -Fq \
+            'data-path = <&gdm2>;' \
+            "$common_dts"
+
+          grep -Fq \
+            'airoha,pon-data-path;' \
+            "$common_dts"
+
+          grep -Fq '&gdm2 {' "$common_dts"
+
+          echo "PON -> GDM2 WAN data path OK."
+
+          # --------------------------------------------------------
+          # MD model DTS
+          # --------------------------------------------------------
+
+          echo "=========================================="
+          echo "XG-040G-MD LAN PORTS / 2.5G DTS"
+          echo "=========================================="
+
+          md_dts="target/linux/airoha/dts/an7581-nokia_xg-040g-md-common.dtsi"
+
+          test -f "$md_dts"
+
+          # EN7572
+          grep -Fq \
+            'en7572: optical-front-end@50' \
+            "$md_dts"
+
+          grep -Fq \
+            'compatible = "airoha,en7572";' \
+            "$md_dts"
+
+          # EN8811H
+          grep -Fq \
+            'en8811: ethernet-phy@f' \
+            "$md_dts"
+
+          grep -Fq \
+            'compatible = "ethernet-phy-id03a2.a411";' \
+            "$md_dts"
+
+          # 2.5G LAN1
+          grep -Fq \
+            '&gdm4 {' \
+            "$md_dts"
+
+          grep -Fq \
+            'openwrt,netdev-name = "lan1";' \
+            "$md_dts"
+
+          grep -Fq \
+            'phy-handle = <&en8811>;' \
+            "$md_dts"
+
+          grep -Fq \
+            'phy-mode = "2500base-x";' \
+            "$md_dts"
+
+          # Integrated LAN2/3/4
+          grep -Fq 'label = "lan2";' "$md_dts"
+          grep -Fq 'label = "lan3";' "$md_dts"
+          grep -Fq 'label = "lan4";' "$md_dts"
+
+          echo "LAN1 EN8811H 2.5G + LAN2/LAN3/LAN4 DTS OK."
+
+          # --------------------------------------------------------
+          # Board network mapping
+          # --------------------------------------------------------
+
+          echo "=========================================="
+          echo "BOARD NETWORK DEFAULT"
+          echo "=========================================="
+
+          board_network="target/linux/airoha/an7581/base-files/etc/board.d/02_network"
+
+          test -f "$board_network"
+
+          grep -Fq \
+            'nokia,xg-040g-md-ubi' \
+            "$board_network"
+
+          grep -Fq \
+            'ucidef_set_interfaces_lan_wan "lan1 lan2 lan3 lan4" "pon0"' \
+            "$board_network"
+
+          echo "LAN ports = lan1 lan2 lan3 lan4"
+          echo "WAN = pon0"
+          echo "Board network mapping OK."
+
+          echo "=========================================="
+          echo "XG-040G-MD HARDWARE SOURCE CHECK PASSED"
+          echo "=========================================="
+
+      # ============================================================
+      # 10. Signing key
       # ============================================================
 
       - name: Load repository signing key
@@ -209,7 +426,7 @@ jobs:
           fi
 
       # ============================================================
-      # 10. Default LAN IP + hostname
+      # 11. LAN IP + hostname
       # ============================================================
 
       - name: Set default LAN IP and hostname
@@ -248,8 +465,6 @@ jobs:
           path.write_text(data)
           PY
 
-          echo "========== Verify network defaults =========="
-
           grep -F \
             'lan) ipad=${ipaddr:-"192.168.2.1"} ;;' \
             package/base-files/files/bin/config_generate
@@ -261,22 +476,19 @@ jobs:
           if grep -Fq \
             'lan) ipad=${ipaddr:-"192.168.1.1"} ;;' \
             package/base-files/files/bin/config_generate; then
-            echo "ERROR: old LAN IP still exists."
+            echo "ERROR: old LAN IP remains."
             exit 1
           fi
 
           if grep -Fq \
             "set system.@system[-1].hostname='ponwrt'" \
             package/base-files/files/bin/config_generate; then
-            echo "ERROR: old hostname still exists."
+            echo "ERROR: old hostname remains."
             exit 1
           fi
 
-          echo "LAN default = 192.168.2.1"
-          echo "Hostname default = ImmortalWrt"
-
       # ============================================================
-      # 11. Branding
+      # 12. Branding
       # ============================================================
 
       - name: Set Argon brand to ImmortalWrt
@@ -312,16 +524,16 @@ jobs:
               data = data.replace(old, new, 1)
               path.write_text(data)
 
-          data = path.read_text()
-
-          if new not in data:
-              raise SystemExit("ERROR: VERSION_DIST was not set to ImmortalWrt")
+          if new not in path.read_text():
+              raise SystemExit(
+                  "ERROR: VERSION_DIST was not set to ImmortalWrt"
+              )
           PY
 
           grep 'VERSION_DIST:=' include/version.mk
 
       # ============================================================
-      # 12. Custom configuration
+      # 13. Custom config
       # ============================================================
 
       - name: Create XG-040G-MD custom config
@@ -329,7 +541,7 @@ jobs:
           cat > /tmp/xg040gmd.config <<'EOF'
 
           # ========================================================
-          # DEVICE - Nokia XG-040G-MD UBI ONLY
+          # XG-040G-MD UBI ONLY
           # ========================================================
 
           # CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_airoha_an7581-evb is not set
@@ -357,13 +569,13 @@ jobs:
           CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_nokia_xg-040g-md-ubi=y
 
           # ========================================================
-          # OPENCLASH DISABLED
+          # OPENCLASH OFF
           # ========================================================
 
           # CONFIG_PACKAGE_luci-app-openclash is not set
 
           # ========================================================
-          # PASSWALL V1 DISABLED
+          # PASSWALL V1 OFF
           # ========================================================
 
           # CONFIG_PACKAGE_luci-app-passwall is not set
@@ -384,24 +596,20 @@ jobs:
           CONFIG_PACKAGE_luci-proto-wireguard=y
 
           # ========================================================
-          # PASSWALL2 - SingBox only + nftables
+          # PASSWALL2
+          # SingBox only
+          # nftables / firewall4
           # ========================================================
 
           CONFIG_PACKAGE_luci-app-passwall2=y
           CONFIG_PACKAGE_luci-i18n-passwall2-zh-cn=y
 
-          # Basic core
-
           # CONFIG_PACKAGE_luci-app-passwall2_Basic_Core_Xray is not set
           CONFIG_PACKAGE_luci-app-passwall2_Basic_Core_SingBox=y
           # CONFIG_PACKAGE_luci-app-passwall2_Basic_Core_All is not set
 
-          # Transparent proxy
-
           # CONFIG_PACKAGE_luci-app-passwall2_Iptables_Transparent_Proxy is not set
           CONFIG_PACKAGE_luci-app-passwall2_Nftables_Transparent_Proxy=y
-
-          # Disable optional heavy / legacy components
 
           # CONFIG_PACKAGE_luci-app-passwall2_INCLUDE_Haproxy is not set
 
@@ -425,7 +633,7 @@ jobs:
           EOF
 
       # ============================================================
-      # 13. Merge configuration
+      # 14. Merge config
       # ============================================================
 
       - name: Configure XG-040G-MD
@@ -443,13 +651,30 @@ jobs:
           make defconfig
 
       # ============================================================
-      # 14. Strict configuration verification
+      # 15. STRICT FINAL CONFIG CHECK
       # ============================================================
 
       - name: Verify final configuration
         shell: bash
         run: |
           set -euo pipefail
+
+          require_package_selected()
+          {
+            local pkg="$1"
+
+            if ! grep -Eq \
+              "^CONFIG_PACKAGE_${pkg}=(y|m)$" \
+              .config; then
+              echo "ERROR: required package not selected:"
+              echo "$pkg"
+              exit 1
+            fi
+
+            grep -E \
+              "^CONFIG_PACKAGE_${pkg}=(y|m)$" \
+              .config
+          }
 
           echo "=========================================="
           echo "TARGET"
@@ -477,6 +702,123 @@ jobs:
 
           echo "Target OK."
 
+          # ========================================================
+          # HARDWARE PACKAGES
+          # ========================================================
+
+          echo "=========================================="
+          echo "XG-040G-MD HARDWARE PACKAGES"
+          echo "=========================================="
+
+          # NPU firmware
+          require_package_selected \
+            "airoha-en7581-npu-firmware"
+
+          # NPU/PPE flow path
+          require_package_selected \
+            "kmod-nf-conntrack-bridge"
+
+          require_package_selected \
+            "kmod-nf-flow"
+
+          require_package_selected \
+            "kmod-nft-offload"
+
+          # EN8811H 2.5G LAN1
+          require_package_selected \
+            "kmod-phy-airoha-en8811h"
+
+          require_package_selected \
+            "airoha-en8811h-firmware"
+
+          require_package_selected \
+            "kmod-libphy"
+
+          # PON optical frontend
+          require_package_selected \
+            "kmod-airoha-en7572"
+
+          require_package_selected \
+            "kmod-airoha-pon-frontend"
+
+          require_package_selected \
+            "kmod-airoha-xpon"
+
+          require_package_selected \
+            "airoha-ponctl"
+
+          require_package_selected \
+            "airoha-pond"
+
+          # Device basics
+          require_package_selected \
+            "kmod-gpio-button-hotplug"
+
+          require_package_selected \
+            "kmod-leds-gpio"
+
+          require_package_selected \
+            "kmod-regulator-userspace-consumer"
+
+          require_package_selected \
+            "kmod-usb3"
+
+          require_package_selected \
+            "kmod-usb-ledtrig-usbport"
+
+          require_package_selected \
+            "fitblk"
+
+          echo "All XG-040G-MD hardware packages selected."
+
+          # ========================================================
+          # KERNEL BUILT-IN DRIVERS
+          # ========================================================
+
+          echo "=========================================="
+          echo "AN7581 BUILT-IN KERNEL DRIVERS"
+          echo "=========================================="
+
+          mapfile -t kernel_cfg_candidates < <(
+            grep -l \
+              '^CONFIG_NET_AIROHA_NPU=y$' \
+              target/linux/airoha/an7581/config-* \
+              2>/dev/null || true
+          )
+
+          if [ "${#kernel_cfg_candidates[@]}" -ne 1 ]; then
+            echo "ERROR: unable to identify AN7581 kernel config."
+            exit 1
+          fi
+
+          kernel_cfg="${kernel_cfg_candidates[0]}"
+
+          for symbol in \
+            CONFIG_NET_VENDOR_AIROHA \
+            CONFIG_NET_AIROHA \
+            CONFIG_NET_AIROHA_NPU \
+            CONFIG_NET_DSA \
+            CONFIG_NET_DEVLINK \
+            CONFIG_PCS_AIROHA \
+            CONFIG_PCS_AIROHA_AN7581 \
+            CONFIG_PHYLIB \
+            CONFIG_PHYLINK \
+            CONFIG_FIXED_PHY \
+            CONFIG_SWPHY
+          do
+            if ! grep -q "^${symbol}=y$" "$kernel_cfg"; then
+              echo "ERROR: kernel network driver missing:"
+              echo "$symbol"
+              exit 1
+            fi
+          done
+
+          echo "AN7581 kernel hardware drivers OK."
+
+          # ========================================================
+          # OPENCLASH
+          # ========================================================
+
           echo "=========================================="
           echo "OPENCLASH"
           echo "=========================================="
@@ -490,6 +832,10 @@ jobs:
 
           echo "OpenClash disabled."
 
+          # ========================================================
+          # ISTORE
+          # ========================================================
+
           echo "=========================================="
           echo "ISTORE"
           echo "=========================================="
@@ -497,7 +843,9 @@ jobs:
           grep '^CONFIG_PACKAGE_luci-app-store=y$' .config
           grep '^CONFIG_PACKAGE_xz-utils=y$' .config
 
-          echo "iStore OK."
+          # ========================================================
+          # WIREGUARD
+          # ========================================================
 
           echo "=========================================="
           echo "WIREGUARD"
@@ -506,11 +854,12 @@ jobs:
           grep '^CONFIG_PACKAGE_kmod-wireguard=y$' .config
           grep '^CONFIG_PACKAGE_wireguard-tools=y$' .config
           grep '^CONFIG_PACKAGE_luci-proto-wireguard=y$' .config
-
           grep '^CONFIG_PACKAGE_luci-lib-uqr=y$' .config
           grep '^CONFIG_PACKAGE_resolveip=y$' .config
 
-          echo "WireGuard OK."
+          # ========================================================
+          # PASSWALL2
+          # ========================================================
 
           echo "=========================================="
           echo "PASSWALL2"
@@ -529,12 +878,6 @@ jobs:
             '^CONFIG_PACKAGE_luci-app-passwall2_Nftables_Transparent_Proxy=y$' \
             .config
 
-          echo "PassWall2 + SingBox + nftables selected."
-
-          echo "=========================================="
-          echo "PASSWALL2 DISABLED OPTIONS"
-          echo "=========================================="
-
           for option in \
             CONFIG_PACKAGE_luci-app-passwall2_Basic_Core_Xray \
             CONFIG_PACKAGE_luci-app-passwall2_Basic_Core_All \
@@ -549,62 +892,54 @@ jobs:
           do
             if grep -q "^${option}=y$" .config; then
               echo "ERROR: unexpected PassWall2 option enabled:"
-              echo "${option}"
+              echo "$option"
               exit 1
             fi
           done
 
-          echo "PassWall2 unwanted components disabled."
+          for pkg in \
+            coreutils \
+            coreutils-base64 \
+            coreutils-nohup \
+            coreutils-timeout \
+            curl \
+            ip-full \
+            libuci-lua \
+            lua \
+            luci-compat \
+            luci-lib-jsonc \
+            lyaml \
+            resolveip \
+            tcping \
+            geoview \
+            v2ray-geoip \
+            v2ray-geosite \
+            unzip
+          do
+            require_package_selected "$pkg"
+          done
 
-          echo "=========================================="
-          echo "PASSWALL2 DEPENDENCIES"
-          echo "=========================================="
-
-          grep '^CONFIG_PACKAGE_coreutils=y$' .config
-          grep '^CONFIG_PACKAGE_coreutils-base64=y$' .config
-          grep '^CONFIG_PACKAGE_coreutils-nohup=y$' .config
-          grep '^CONFIG_PACKAGE_coreutils-timeout=y$' .config
-
-          grep '^CONFIG_PACKAGE_curl=y$' .config
-          grep '^CONFIG_PACKAGE_ip-full=y$' .config
-
-          grep '^CONFIG_PACKAGE_libuci-lua=y$' .config
-          grep '^CONFIG_PACKAGE_lua=y$' .config
-
-          grep '^CONFIG_PACKAGE_luci-compat=y$' .config
-          grep '^CONFIG_PACKAGE_luci-lib-jsonc=y$' .config
-
-          grep '^CONFIG_PACKAGE_lyaml=y$' .config
-          grep '^CONFIG_PACKAGE_resolveip=y$' .config
-          grep '^CONFIG_PACKAGE_tcping=y$' .config
-          grep '^CONFIG_PACKAGE_geoview=y$' .config
-
-          grep '^CONFIG_PACKAGE_v2ray-geoip=y$' .config
-          grep '^CONFIG_PACKAGE_v2ray-geosite=y$' .config
-
-          grep '^CONFIG_PACKAGE_unzip=y$' .config
-
-          echo "PassWall2 dependencies OK."
+          # ========================================================
+          # FIREWALL / NFT
+          # ========================================================
 
           echo "=========================================="
           echo "FIREWALL4 / NFTABLES"
           echo "=========================================="
 
           grep '^CONFIG_PACKAGE_firewall4=y$' .config
-
           grep '^CONFIG_PACKAGE_chinadns-ng=y$' .config
-
           grep '^CONFIG_PACKAGE_dnsmasq-full=y$' .config
           grep '^CONFIG_PACKAGE_dnsmasq_full_nftset=y$' .config
-
-          # PonWrt/ImmortalWrt current nftables package
           grep '^CONFIG_PACKAGE_nftables-json=y$' .config
 
           grep '^CONFIG_PACKAGE_kmod-nft-socket=y$' .config
           grep '^CONFIG_PACKAGE_kmod-nft-tproxy=y$' .config
           grep '^CONFIG_PACKAGE_kmod-nft-nat=y$' .config
 
-          echo "Firewall4 / nftables OK."
+          # ========================================================
+          # PON UI
+          # ========================================================
 
           echo "=========================================="
           echo "PON"
@@ -612,15 +947,15 @@ jobs:
 
           grep '^CONFIG_PACKAGE_kmod-airoha-pon-frontend=y$' .config
           grep '^CONFIG_PACKAGE_kmod-airoha-xpon=y$' .config
-
           grep '^CONFIG_PACKAGE_airoha-pon-debug=y$' .config
           grep '^CONFIG_PACKAGE_airoha-ponctl=y$' .config
           grep '^CONFIG_PACKAGE_airoha-pond=y$' .config
-
           grep '^CONFIG_PACKAGE_luci-app-pon=y$' .config
           grep '^CONFIG_PACKAGE_luci-i18n-pon-zh-cn=y$' .config
 
-          echo "PON OK."
+          # ========================================================
+          # SAMBA
+          # ========================================================
 
           echo "=========================================="
           echo "SAMBA"
@@ -630,24 +965,23 @@ jobs:
           grep '^CONFIG_PACKAGE_luci-app-samba4=y$' .config
           grep '^CONFIG_PACKAGE_luci-i18n-samba4-zh-cn=y$' .config
 
-          echo "Samba OK."
+          # ========================================================
+          # CHINESE
+          # ========================================================
 
           echo "=========================================="
           echo "SIMPLIFIED CHINESE"
           echo "=========================================="
 
           grep '^CONFIG_LUCI_LANG_zh_Hans=y$' .config
-
           grep '^CONFIG_PACKAGE_luci-i18n-base-zh-cn=y$' .config
           grep '^CONFIG_PACKAGE_luci-i18n-pon-zh-cn=y$' .config
           grep '^CONFIG_PACKAGE_luci-i18n-passwall2-zh-cn=y$' .config
           grep '^CONFIG_PACKAGE_luci-i18n-samba4-zh-cn=y$' .config
 
-          echo "Simplified Chinese OK."
-
-          echo "=========================================="
-          echo "DEFAULT IP / HOSTNAME"
-          echo "=========================================="
+          # ========================================================
+          # IP / hostname
+          # ========================================================
 
           grep -F \
             'lan) ipad=${ipaddr:-"192.168.2.1"} ;;' \
@@ -657,14 +991,12 @@ jobs:
             "set system.@system[-1].hostname='ImmortalWrt'" \
             package/base-files/files/bin/config_generate
 
-          echo "192.168.2.1 / ImmortalWrt OK."
-
           echo "=========================================="
           echo "ALL PRE-BUILD CHECKS PASSED"
           echo "=========================================="
 
       # ============================================================
-      # 15. Config-only test mode
+      # 16. Config-only
       # ============================================================
 
       - name: Upload build config
@@ -677,7 +1009,7 @@ jobs:
           retention-days: 7
 
       # ============================================================
-      # 16. Download sources
+      # 17. Download
       # ============================================================
 
       - name: Download sources
@@ -686,7 +1018,7 @@ jobs:
           make download -j"$(nproc)"
 
       # ============================================================
-      # 17. Build
+      # 18. Build
       # ============================================================
 
       - name: Build firmware
@@ -695,7 +1027,7 @@ jobs:
           make -j"$(nproc)"
 
       # ============================================================
-      # 18. Verify actual firmware manifest
+      # 19. FINAL FIRMWARE MANIFEST HARDWARE CHECK
       # ============================================================
 
       - name: Verify firmware package manifest
@@ -718,7 +1050,7 @@ jobs:
           )
 
           if [ "${#manifests[@]}" -ne 1 ]; then
-            echo "ERROR: expected exactly one device manifest."
+            echo "ERROR: expected exactly one manifest."
             echo "Found ${#manifests[@]}."
             printf '%s\n' "${manifests[@]}"
             exit 1
@@ -729,6 +1061,96 @@ jobs:
           echo "========== Manifest =========="
           echo "$manifest"
 
+          require_manifest_package()
+          {
+            local pkg="$1"
+
+            if ! grep -q "^${pkg} " "$manifest"; then
+              echo "ERROR: final firmware missing package:"
+              echo "$pkg"
+              exit 1
+            fi
+
+            echo "OK: $pkg"
+          }
+
+          echo "=========================================="
+          echo "NPU / PPE"
+          echo "=========================================="
+
+          require_manifest_package \
+            "airoha-en7581-npu-firmware"
+
+          require_manifest_package \
+            "kmod-nf-conntrack-bridge"
+
+          require_manifest_package \
+            "kmod-nf-flow"
+
+          require_manifest_package \
+            "kmod-nft-offload"
+
+          echo "=========================================="
+          echo "2.5G LAN1 / EN8811H"
+          echo "=========================================="
+
+          require_manifest_package \
+            "kmod-phy-airoha-en8811h"
+
+          require_manifest_package \
+            "airoha-en8811h-firmware"
+
+          require_manifest_package \
+            "kmod-libphy"
+
+          echo "=========================================="
+          echo "PON / WAN"
+          echo "=========================================="
+
+          require_manifest_package \
+            "kmod-airoha-en7572"
+
+          require_manifest_package \
+            "kmod-airoha-pon-frontend"
+
+          require_manifest_package \
+            "kmod-airoha-xpon"
+
+          require_manifest_package \
+            "airoha-ponctl"
+
+          require_manifest_package \
+            "airoha-pond"
+
+          require_manifest_package \
+            "luci-app-pon"
+
+          echo "=========================================="
+          echo "DEVICE SUPPORT"
+          echo "=========================================="
+
+          require_manifest_package \
+            "kmod-gpio-button-hotplug"
+
+          require_manifest_package \
+            "kmod-leds-gpio"
+
+          require_manifest_package \
+            "kmod-regulator-userspace-consumer"
+
+          require_manifest_package \
+            "kmod-usb3"
+
+          require_manifest_package \
+            "kmod-usb-ledtrig-usbport"
+
+          require_manifest_package \
+            "fitblk"
+
+          echo "=========================================="
+          echo "CUSTOM SOFTWARE"
+          echo "=========================================="
+
           for pkg in \
             luci-app-store \
             kmod-wireguard \
@@ -737,26 +1159,24 @@ jobs:
             luci-app-passwall2 \
             sing-box \
             chinadns-ng \
-            luci-app-pon \
-            airoha-ponctl \
-            airoha-pond \
             samba4-server
           do
-            if ! grep -q "^${pkg} " "$manifest"; then
-              echo "ERROR: firmware manifest is missing package: ${pkg}"
-              exit 1
-            fi
+            require_manifest_package "$pkg"
           done
 
-          if grep -q '^luci-app-openclash ' "$manifest"; then
-            echo "ERROR: OpenClash unexpectedly exists in firmware."
+          if grep -q \
+            '^luci-app-openclash ' \
+            "$manifest"; then
+            echo "ERROR: OpenClash unexpectedly exists."
             exit 1
           fi
 
-          echo "Actual firmware package manifest OK."
+          echo "=========================================="
+          echo "FINAL MANIFEST HARDWARE CHECK PASSED"
+          echo "=========================================="
 
       # ============================================================
-      # 19. Collect exactly one sysupgrade.itb
+      # 20. Collect exactly one ITB
       # ============================================================
 
       - name: Collect XG-040G-MD firmware
@@ -797,7 +1217,7 @@ jobs:
           cp -v "$firmware" release/
 
       # ============================================================
-      # 20. Final firmware validation
+      # 21. Final ITB validation
       # ============================================================
 
       - name: Verify final firmware
@@ -830,7 +1250,7 @@ jobs:
           sha256sum "$firmware"
 
       # ============================================================
-      # 21. Publish raw ITB to GitHub Release
+      # 22. GitHub Release
       # ============================================================
 
       - name: Publish raw ITB to GitHub Release
@@ -865,12 +1285,6 @@ jobs:
             sha256sum "$firmware" | awk '{print $1}'
           )"
 
-          echo "========== Release =========="
-          echo "Tag: ${release_tag}"
-          echo "Source: ${source_sha}"
-          echo "Firmware: ${firmware}"
-          echo "SHA256: ${firmware_sha256}"
-
           gh release create \
             "${release_tag}" \
             "${firmware}" \
@@ -879,8 +1293,24 @@ jobs:
             --title "Nokia XG-040G-MD ${short_sha}" \
             --notes "Nokia XG-040G-MD UBI sysupgrade firmware.
 
-          Default LAN IP: 192.168.2.1
-          Default hostname: ImmortalWrt
+          Hardware:
+          AN7581
+          EN7572 PON frontend
+          EN8811H 2.5G LAN1
+          LAN2/LAN3/LAN4 integrated switch
+          Airoha NPU/PPE
+
+          WAN:
+          pon0
+
+          LAN:
+          lan1 lan2 lan3 lan4
+
+          Default LAN IP:
+          192.168.2.1
+
+          Default hostname:
+          ImmortalWrt
 
           Proxy:
           PassWall2 + SingBox + nftables
@@ -891,14 +1321,15 @@ jobs:
           OpenClash:
           Not included
 
-          Source commit: ${source_sha}
+          Source commit:
+          ${source_sha}
 
           SHA256:
           ${firmware_sha256}" \
             --prerelease
 
       # ============================================================
-      # 22. Verify published Release
+      # 23. Verify Release
       # ============================================================
 
       - name: Verify published Release
@@ -910,6 +1341,7 @@ jobs:
           set -euo pipefail
 
           short_sha="$(git rev-parse --short=8 HEAD)"
+
           release_tag="xg040gmd-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}-${short_sha}"
 
           asset_count="$(
@@ -946,5 +1378,6 @@ jobs:
 
           echo "=========================================="
           echo "BUILD SUCCESS"
+          echo "XG-040G-MD HARDWARE CHECK PASSED"
           echo "Raw firmware: ${asset_name}"
           echo "=========================================="
